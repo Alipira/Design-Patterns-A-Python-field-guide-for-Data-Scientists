@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strategy &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--behavioral)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Behavioral &middot; <b>Strategy</b></div>
+  <div class="pn"><a rel="next" href="observer.html">Observer &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 01 / 23 &middot; Behavioral &middot; Start here</span>
+  <h1>Strategy</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="8" width="9" height="8" rx="1.5"/><path d="M12 12h3.5"/><rect x="16.8" y="4" width="4.4" height="4.4" rx="1" stroke-dasharray="2.4 2"/><rect x="16.8" y="9.8" width="4.4" height="4.4" rx="1"/><rect x="16.8" y="15.6" width="4.4" height="4.4" rx="1" stroke-dasharray="2.4 2"/></svg></div>
+  <p class="intent">Extract an algorithm that varies behind a common interface, so behavior becomes a value you pass in and swap at runtime.</p>
+</header>
+<h2>The problem</h2>
+<p>An e-commerce <code>Order</code> has been accumulating pricing rules for
+two years:</p><pre><code>class Order:
+    def __init__(self, subtotal: float, customer):
+        self.subtotal = subtotal
+        self.customer = customer
+
+    def total(self) -&gt; float:
+        if self.customer.is_vip:
+            return self.subtotal * 0.80
+        elif self.customer.loyalty_points &gt; 1000:
+            return self.subtotal - self.customer.loyalty_points / 20
+        elif self.customer.promo_code == &quot;SUMMER26&quot;:
+            return self.subtotal * 0.85
+        # next sprint: bundles, first-order discounts, flash sales...
+        return self.subtotal</code></pre>
+<p>Three compounding problems: every new rule edits <code>Order</code>, so the
+class never stabilizes (a merge-conflict magnet); <code>Order</code> must know
+about VIP tiers, loyalty programs, and marketing campaigns &mdash; three other
+teams' business; and no rule can be tested without building a whole customer
+in exactly the right state.</p><h2>The pattern</h2>
+<p>Extract the varying algorithm behind an interface; the context holds one
+and delegates. <em>Which</em> algorithm runs becomes a decision made by
+whoever creates the order, not by the order itself:</p><pre><code>from typing import Protocol
+
+class DiscountStrategy(Protocol):
+    def apply(self, subtotal: float) -&gt; float: ...
+
+class NoDiscount:
+    def apply(self, subtotal: float) -&gt; float:
+        return subtotal
+
+class PercentageDiscount:
+    def __init__(self, percent: float):
+        self.percent = percent
+
+    def apply(self, subtotal: float) -&gt; float:
+        return subtotal * (1 - self.percent / 100)
+
+class LoyaltyPointsDiscount:
+    def __init__(self, points: int):
+        self.points = points
+
+    def apply(self, subtotal: float) -&gt; float:
+        return max(0.0, subtotal - self.points / 20)
+
+class Order:
+    def __init__(self, subtotal: float, discount: DiscountStrategy | None = None):
+        self.subtotal = subtotal
+        self.discount = discount or NoDiscount()
+
+    def total(self) -&gt; float:
+        return self.discount.apply(self.subtotal)
+
+order = Order(100.0, PercentageDiscount(10))
+order.total()                                  # 90.0
+order.discount = LoyaltyPointsDiscount(240)    # swapped at runtime
+order.total()                                  # 88.0</code></pre><div class="demo"><span class="label">Try it — live demo</span>
+<div>
+  <button id="st-none" class="on">NoDiscount()</button>
+  <button id="st-pct">PercentageDiscount(10)</button>
+  <button id="st-pts">LoyaltyPointsDiscount(240)</button>
+</div>
+<div class="out" id="st-out"></div>
+<p class="note">Same object, same total() call &mdash; only the plugged-in strategy changes. The Order class is never edited.</p></div><h2>The Pythonic twist</h2>
+<p>The GoF wrote for C++ and Smalltalk, where an algorithm-you-can-pass-around
+had to be wrapped in an object. Python has first-class functions, so a
+stateless strategy is just a function:</p><pre><code>from typing import Callable
+
+DiscountFn = Callable[[float], float]
+
+def no_discount(subtotal: float) -&gt; float:
+    return subtotal
+
+def percentage(percent: float) -&gt; DiscountFn:
+    return lambda subtotal: subtotal * (1 - percent / 100)</code></pre>
+<p>And the small revelation: you've used this pattern for years &mdash;
+<code>sorted(words, key=len)</code> injects an interchangeable algorithm into
+a stable sorting context. Rule of thumb: a plain function when the strategy is
+one stateless operation; a class when it carries configuration or state, has
+several related methods, or must be registered and discovered by name.
+Neither, when there's only one algorithm and no variation on the horizon.</p><div class="box"><span class="label">In the wild</span>
+<p><code>sorted(key=...)</code>, <code>min</code>/<code>max</code> key
+functions, <code>json.dumps(default=...)</code>, <code>re.sub</code> with a
+callable replacement. Django's pluggable authentication backends and DRF's
+authentication classes are the class-based form; Python's pluggable hash
+randomization and <code>functools.cmp_to_key</code> live in the same family.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>One algorithm, or a two-branch <code>if</code> that will never grow: keep
+the <code>if</code> &mdash; it's honest code. Strategy applied preemptively is
+the most common symptom of pattern fever; the pattern is a refactoring target
+you move toward when variation actually appears.</p></div><div class="box exercise"><span class="label">Exercise 01</span>
+<p>The exercise from our chat, for the record. Refactor to Strategy twice
+&mdash; once with <code>Protocol</code>-based classes, once with plain
+functions &mdash; decide which you'd ship and why. Then add drone delivery
+(flat 8.0, only valid under 1.5&nbsp;kg) <em>without editing any existing
+strategy or the calculator</em>. That last constraint is the whole exam.</p><pre><code>class ShippingCalculator:
+    def cost(self, order) -&gt; float:
+        if order.shipping == &quot;standard&quot;:
+            return 5.0 if order.weight_kg &lt; 2 else 5.0 + order.weight_kg * 1.2
+        elif order.shipping == &quot;express&quot;:
+            return 15.0 + order.weight_kg * 2.5
+        elif order.shipping == &quot;pickup&quot;:
+            return 0.0
+        raise ValueError(order.shipping)</code></pre><details><summary>Hint</summary><p>Pair this with a registry (see Factory Method) so
+<code>"drone"</code> is one new class plus one <code>@register</code> line.
+The drone's weight rule lives inside the drone strategy &mdash; validation is
+part of the algorithm that varies.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><span></span><a rel="next" href="observer.html" style="text-align:right"><span class="dir">next &rarr;</span>Observer</a></div>
+</main>
+<script src="app.js"></script>
+<script>
+(function () {
+  var strategies = {
+    none: {label: "NoDiscount()", fn: function (s) { return s; }},
+    pct:  {label: "PercentageDiscount(10)", fn: function (s) { return s * 0.9; }},
+    pts:  {label: "LoyaltyPointsDiscount(240)", fn: function (s) { return Math.max(0, s - 12); }}
+  };
+  function pick(k) {
+    var s = strategies[k];
+    document.getElementById("st-out").textContent =
+      ">>> order = Order(100.0, " + s.label + ")\n>>> order.total()\n" + s.fn(100).toFixed(1);
+    Object.keys(strategies).forEach(function (id) {
+      document.getElementById("st-" + id).classList.toggle("on", id === k);
+    });
+  }
+  Object.keys(strategies).forEach(function (k) {
+    document.getElementById("st-" + k).addEventListener("click", function () { pick(k); });
+  });
+  pick("none");
+})();</script>
+</body>
+</html>

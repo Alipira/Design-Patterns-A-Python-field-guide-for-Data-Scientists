@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>State &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--behavioral)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Behavioral &middot; <b>State</b></div>
+  <div class="pn"><a rel="prev" href="composite.html">&larr; Composite</a><a rel="next" href="proxy.html">Proxy &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 12 / 23 &middot; Behavioral</span>
+  <h1>State</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6.5" cy="12" r="3.4"/><circle cx="17.5" cy="12" r="3.4"/><path d="M9.2 9C11 7 13 7 14.8 9"/><path d="M12.9 7.1 15 8.9l-2.5.8"/><path d="M14.8 15C13 17 11 17 9.2 15"/><path d="M11.1 16.9 9 15.1l2.5-.8"/></svg></div>
+  <p class="intent">Give an object different behavior per lifecycle state by making each state a class — the if-ladder’s dignified retirement.</p>
+</header>
+<h2>The problem</h2>
+<p>An order moves through a lifecycle: new &rarr; paid &rarr; shipped &rarr;
+delivered, with cancellation rules that differ at every stage. As a string
+field, every method becomes a ladder &mdash; and the ladders multiply and
+drift:</p><pre><code>class Order:
+    def __init__(self):
+        self.status = &quot;new&quot;
+
+    def cancel(self) -&gt; None:
+        if self.status == &quot;new&quot;:
+            self.status = &quot;cancelled&quot;
+        elif self.status == &quot;paid&quot;:
+            self.status = &quot;cancelled&quot;   # ...and refund? someone forgot
+        elif self.status == &quot;shipped&quot;:
+            raise ValueError(&quot;can&#x27;t cancel a shipped order&quot;)
+        # &#x27;delivered&#x27;? falls through silently. bug.</code></pre><h2>The pattern</h2>
+<p>Make each state a class that implements the behavior valid <em>in that
+state</em> &mdash; including which transitions are legal. The context
+delegates everything and just holds the current state object:</p><pre><code>class InvalidTransition(Exception):
+    pass
+
+class OrderState:
+    name = &quot;base&quot;
+
+    def pay(self, order) -&gt; None:
+        raise InvalidTransition(f&quot;can&#x27;t pay from {self.name}&quot;)
+
+    def ship(self, order) -&gt; None:
+        raise InvalidTransition(f&quot;can&#x27;t ship from {self.name}&quot;)
+
+    def cancel(self, order) -&gt; None:
+        raise InvalidTransition(f&quot;can&#x27;t cancel from {self.name}&quot;)
+
+class New(OrderState):
+    name = &quot;new&quot;
+    def pay(self, order) -&gt; None:
+        order.state = Paid()
+    def cancel(self, order) -&gt; None:
+        order.state = Cancelled()
+
+class Paid(OrderState):
+    name = &quot;paid&quot;
+    def ship(self, order) -&gt; None:
+        order.state = Shipped()
+    def cancel(self, order) -&gt; None:
+        print(&quot;issuing refund&quot;)               # state-specific behavior
+        order.state = Cancelled()
+
+class Shipped(OrderState):
+    name = &quot;shipped&quot;
+
+class Cancelled(OrderState):
+    name = &quot;cancelled&quot;
+
+class Order:
+    def __init__(self):
+        self.state: OrderState = New()
+
+    def pay(self) -&gt; None: self.state.pay(self)
+    def ship(self) -&gt; None: self.state.ship(self)
+    def cancel(self) -&gt; None: self.state.cancel(self)
+
+o = Order()
+o.pay()
+o.cancel()          # prints &#x27;issuing refund&#x27;
+# o.ship()          # InvalidTransition: can&#x27;t ship from cancelled</code></pre>
+<p>Every behavior now lives with the state it belongs to, illegal moves fail
+loudly by default (the base class), and adding a <code>Returned</code> state
+is one new class &mdash; not an edit to five ladders.</p><h2>The Pythonic twist</h2>
+<p>For machines where transitions are the whole story and per-state
+<em>behavior</em> is thin, a table beats a class family &mdash; data over
+code:</p><pre><code>TRANSITIONS = {
+    (&quot;new&quot;, &quot;pay&quot;): &quot;paid&quot;,
+    (&quot;new&quot;, &quot;cancel&quot;): &quot;cancelled&quot;,
+    (&quot;paid&quot;, &quot;ship&quot;): &quot;shipped&quot;,
+    (&quot;paid&quot;, &quot;cancel&quot;): &quot;cancelled&quot;,
+    (&quot;shipped&quot;, &quot;deliver&quot;): &quot;delivered&quot;,
+}
+
+class Order:
+    def __init__(self):
+        self.status = &quot;new&quot;
+
+    def fire(self, event: str) -&gt; None:
+        try:
+            self.status = TRANSITIONS[(self.status, event)]
+        except KeyError:
+            raise InvalidTransition(f&quot;{event!r} invalid in {self.status!r}&quot;) from None</code></pre>
+<p>The honest heuristic: table for transition-heavy/behavior-light machines,
+state classes once states carry real logic (the refund above). State vs
+Strategy, since they're structurally identical: strategies are interchangeable
+peers that don't know each other; states know their neighbors and drive their
+own succession.</p><div class="box"><span class="label">In the wild</span>
+<p>TCP connection lifecycles, parsers and lexers (tokenizer modes), game AI
+(patrol/chase/flee), payment and order lifecycles in every commerce system,
+<code>asyncio.Task</code>'s pending/running/done, and workflow engines. The
+<code>transitions</code> library on PyPI is the table form productized.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>Two or three states with trivial rules: an <code>Enum</code> field and a
+couple of honest <code>if</code>s is less machinery. The class family's cost
+is boilerplate and object churn; don't pay it until states have real,
+divergent behavior. And resist state objects that accumulate mutable fields
+&mdash; keep them stateless singletons where possible so they can be
+shared.</p></div><div class="box exercise"><span class="label">Exercise 12</span>
+<p>Model a vending machine: states <code>Idle</code>, <code>HasCoin</code>,
+<code>Dispensing</code>; events <code>insert_coin</code>,
+<code>select_item</code>, <code>refund</code>. Rules: selecting from Idle
+raises; refund from HasCoin returns the coin and goes Idle; Dispensing
+auto-returns to Idle after dispensing. Implement with state classes, then
+again with a transition table, and note which version made the
+&ldquo;auto-return after dispensing&rdquo; rule easier to express &mdash;
+that's the classifying question for your future machines.</p><details><summary>Hint</summary><p>Auto-return is awkward in a pure table (it's behavior, not
+just a transition) &mdash; in the class version, <code>Dispensing.enter()</code>
+or the <code>select_item</code> handler can do work <em>then</em> transition.
+When you find yourself wanting entry/exit actions, you've outgrown the
+table.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="composite.html"><span class="dir">&larr; previous</span>Composite</a><a rel="next" href="proxy.html" style="text-align:right"><span class="dir">next &rarr;</span>Proxy</a></div>
+</main>
+<script src="app.js"></script>
+
+</body>
+</html>

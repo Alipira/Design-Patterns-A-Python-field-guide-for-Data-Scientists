@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Composite &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--structural)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Structural &middot; <b>Composite</b></div>
+  <div class="pn"><a rel="prev" href="template-method.html">&larr; Template Method</a><a rel="next" href="state.html">State &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 11 / 23 &middot; Structural</span>
+  <h1>Composite</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5.5" r="2.3"/><circle cx="6" cy="17.5" r="2.3"/><circle cx="18" cy="17.5" r="2.3"/><path d="M10.9 7.4 7 15.6M13.1 7.4 17 15.6"/></svg></div>
+  <p class="intent">Treat single objects and whole trees of objects through one interface, so recursion replaces type-checking.</p>
+</header>
+<h2>The problem</h2>
+<p>You're computing the size of a backup: folders contain files <em>and other
+folders</em>. Without a shared interface, every operation grows an
+<code>isinstance</code> ladder &mdash; and every new operation (render, count,
+search) repeats it:</p><pre><code>def total_size(item) -&gt; int:
+    if isinstance(item, File):
+        return item.size
+    elif isinstance(item, Folder):
+        return sum(total_size(child) for child in item.children)
+    raise TypeError(item)</code></pre><h2>The pattern</h2>
+<p>Composite gives leaf and container the <em>same</em> interface. The
+container implements each operation by delegating to its children &mdash; the
+recursion moves inside the structure, and clients stop caring which kind of
+node they hold:</p><pre><code>from typing import Protocol
+
+class Node(Protocol):
+    def size(self) -&gt; int: ...
+    def render(self, indent: int = 0) -&gt; str: ...
+
+class File:
+    def __init__(self, name: str, size: int):
+        self.name, self._size = name, size
+
+    def size(self) -&gt; int:
+        return self._size
+
+    def render(self, indent: int = 0) -&gt; str:
+        return &quot; &quot; * indent + f&quot;{self.name} ({self._size} B)&quot;
+
+class Folder:
+    def __init__(self, name: str, *children: Node):
+        self.name = name
+        self.children = list(children)
+
+    def add(self, node: Node) -&gt; &quot;Folder&quot;:
+        self.children.append(node)
+        return self
+
+    def size(self) -&gt; int:
+        return sum(child.size() for child in self.children)   # &lt;- the trick
+
+    def render(self, indent: int = 0) -&gt; str:
+        lines = [&quot; &quot; * indent + f&quot;{self.name}/&quot;]
+        lines += [child.render(indent + 2) for child in self.children]
+        return &quot;\n&quot;.join(lines)
+
+root = Folder(&quot;backup&quot;,
+              File(&quot;notes.txt&quot;, 300),
+              Folder(&quot;photos&quot;, File(&quot;cat.jpg&quot;, 51200), File(&quot;dog.jpg&quot;, 48800)))
+
+root.size()     # 100300 -- one call, arbitrary depth
+print(root.render())</code></pre>
+<p>Notice what happened to <code>total_size</code>: it's gone. A folder of
+folders of files answers <code>size()</code> the same way a single file does.
+Adding an operation now means adding one method to each class &mdash; no
+type ladders anywhere.</p><h2>The Pythonic twist</h2>
+<p>Duck typing means you don't even need the <code>Protocol</code> at runtime
+&mdash; anything with <code>size()</code> and <code>render()</code> can live
+in the tree, which is how plugins slot into composite structures. Two
+practical notes from production trees: implement <code>__iter__</code> on the
+composite (a generator with <code>yield from</code>) so clients can walk it
+with a plain <code>for</code> loop, and guard against cycles if nodes can be
+re-parented &mdash; a folder added to its own descendant recurses forever.</p><pre><code>from typing import Iterator
+
+class Folder2(Folder):
+    def __iter__(self) -&gt; Iterator[Node]:
+        for child in self.children:
+            yield child
+            if isinstance(child, Folder):
+                yield from child          # depth-first walk for free</code></pre>
+<p>There's a classic design tension here worth knowing by name:
+<em>transparency vs safety</em>. Putting <code>add()</code> on the shared
+interface makes leaves and composites fully interchangeable (transparent) but
+means <code>file.add(...)</code> exists and must fail at runtime. Keeping
+<code>add()</code> only on <code>Folder</code> (as above) is safer but means
+clients occasionally check the type. Python culture leans toward safety here;
+either is defensible if chosen deliberately.</p><div class="box"><span class="label">In the wild</span>
+<p><code>xml.etree.ElementTree</code>: an <code>Element</code> contains
+elements, and <code>iter()</code>/<code>findall()</code> walk the tree
+uniformly. Python's own <code>ast</code> module is a composite your code
+becomes. GUI toolkits (a window contains panels contain buttons), scene
+graphs in game engines, org charts, and JSON itself &mdash; dicts of lists of
+dicts &mdash; are all this shape.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>A flat, homogeneous collection is a <code>list</code> &mdash; don't build a
+tree for data with no hierarchy. If leaf and container genuinely share almost
+no operations, forcing one interface produces methods that lie
+(<code>NotImplementedError</code> farms). And for very deep trees, remember
+Python's recursion limit: an iterative walk with an explicit stack beats
+elegant recursion around a thousand levels down.</p></div><div class="box exercise"><span class="label">Exercise 11</span>
+<p>Build a restaurant menu: <code>MenuItem(name, price)</code> and
+<code>Menu(name, *children)</code> where menus nest (Dinner &rarr; Desserts
+&rarr; items). Implement <code>price()</code> (sum), <code>render()</code>
+(indented), and then the real test: <code>find(name)</code> returning the
+first node with that name at any depth, implemented on <em>both</em> classes
+so the client never type-checks. Bonus: make <code>Menu</code> iterable and
+reimplement <code>find</code> as a two-line loop over <code>self</code>.</p><details><summary>Hint</summary><p><code>File</code>-style leaf: <code>find</code> returns
+<code>self if self.name == name else None</code>. Composite: return itself on
+match, otherwise loop children and return the first non-<code>None</code>.
+The bonus version: <code>for node in self: if node.name == name: return
+node</code>.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="template-method.html"><span class="dir">&larr; previous</span>Template Method</a><a rel="next" href="state.html" style="text-align:right"><span class="dir">next &rarr;</span>State</a></div>
+</main>
+<script src="app.js"></script>
+
+</body>
+</html>

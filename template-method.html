@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Template Method &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--behavioral)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Behavioral &middot; <b>Template Method</b></div>
+  <div class="pn"><a rel="prev" href="command.html">&larr; Command</a><a rel="next" href="composite.html">Composite &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 10 / 23 &middot; Behavioral</span>
+  <h1>Template Method</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M7.5 9h9"/><path d="M7.5 13h9" stroke-dasharray="2.5 2.2"/><path d="M7.5 17h9"/></svg></div>
+  <p class="intent">Fix the skeleton of an algorithm in a base class and let subclasses fill in the steps — “don’t call us, we’ll call you.”</p>
+</header>
+<h2>The problem</h2>
+<p>Three data importers &mdash; CSV, JSON, and a REST API &mdash; were written
+by three people. Each one fetches, parses, validates, and saves&hellip; in
+three slightly different orders, with the deduplication fix applied to two of
+them and the retry fix to a different two. The <em>skeleton</em> is shared;
+only the parsing genuinely differs. Copy-paste has turned one algorithm into
+three drifting ones.</p><h2>The pattern</h2>
+<p>Put the invariant skeleton in a base class method that calls a mix of
+concrete steps, abstract steps (subclasses must fill), and optional hooks
+(subclasses may override). The base class owns the order forever:</p><pre><code>from abc import ABC, abstractmethod
+
+class Importer(ABC):
+    def run(self, source: str) -&gt; int:          # the template method
+        raw = self.fetch(source)
+        records = self.parse(raw)               # &lt;- varies (abstract)
+        records = [r for r in records if self.is_valid(r)]
+        self.post_process(records)              # &lt;- hook (optional)
+        return self.save(records)
+
+    def fetch(self, source: str) -&gt; str:
+        with open(source) as f:
+            return f.read()
+
+    @abstractmethod
+    def parse(self, raw: str) -&gt; list[dict]: ...
+
+    def is_valid(self, record: dict) -&gt; bool:   # sensible default
+        return bool(record.get(&quot;id&quot;))
+
+    def post_process(self, records: list[dict]) -&gt; None:
+        pass                                    # hook: default is nothing
+
+    def save(self, records: list[dict]) -&gt; int:
+        print(f&quot;saving {len(records)} records&quot;)
+        return len(records)
+
+class CsvImporter(Importer):
+    def parse(self, raw: str) -&gt; list[dict]:
+        header, *rows = raw.strip().splitlines()
+        keys = header.split(&quot;,&quot;)
+        return [dict(zip(keys, row.split(&quot;,&quot;))) for row in rows]
+
+class JsonImporter(Importer):
+    def parse(self, raw: str) -&gt; list[dict]:
+        import json
+        return json.loads(raw)</code></pre>
+<p>The inversion is the point: subclasses don't call the framework, the
+framework calls them &mdash; the Hollywood principle. Fix deduplication once
+in <code>run()</code> and every importer, present and future, gets it.</p><h2>The Pythonic twist</h2>
+<p>This is the one classic pattern where inheritance is the mechanism rather
+than a smell &mdash; but Python gives you a composition alternative: pass the
+varying step in as a function, and the &ldquo;base class&rdquo; becomes a
+plain function. Same skeleton, no hierarchy:</p><pre><code>from typing import Callable
+
+def run_import(source: str, parse: Callable[[str], list[dict]]) -&gt; int:
+    with open(source) as f:
+        raw = f.read()
+    records = [r for r in parse(raw) if r.get(&quot;id&quot;)]
+    print(f&quot;saving {len(records)} records&quot;)
+    return len(records)</code></pre>
+<p>Choosing between them: Template Method when there are <em>several</em>
+related steps and hooks that belong together, or when a framework wants a
+class to register; the function version when exactly one step varies &mdash;
+at which point you've rediscovered Strategy, which is precisely the
+relationship between these two patterns.</p><div class="box"><span class="label">In the wild</span>
+<p><code>unittest.TestCase</code> is the canonical one: the framework's
+skeleton calls your <code>setUp</code>, <code>test_*</code>,
+<code>tearDown</code>. Django class-based views (<code>get_context_data</code>
+and friends), <code>http.server.BaseHTTPRequestHandler.do_GET</code>,
+<code>cmd.Cmd</code>, and asyncio's protocol callbacks
+(<code>connection_made</code>, <code>data_received</code>) all hand you hooks
+inside a fixed skeleton.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>When the steps vary <em>independently</em> (parse varies AND save varies
+AND validation varies), one inheritance axis can't express the combinations
+&mdash; compose strategies instead. Deep template hierarchies develop the
+fragile-base-class disease: a change to the skeleton silently breaks
+subclasses you forgot exist. Keep it one level deep and the skeleton short.</p></div><div class="box exercise"><span class="label">Exercise 10</span>
+<p>Implement the <code>Importer</code> above plus an <code>ApiImporter</code>
+whose <code>fetch</code> is also overridden (return a canned JSON string;
+no network). Give it a <code>post_process</code> hook that lowercases every
+record's keys. Then rewrite the whole thing as the composition version with
+<em>two</em> injected functions (<code>parse</code>, <code>validate</code>)
+and answer in two sentences: at how many varying steps does the class version
+start winning?</p><details><summary>Hint</summary><p>There's no universally right answer, but a defensible one:
+with one varying step, functions win outright; at two or three <em>related</em>
+steps plus a hook, the class starts paying for itself because the steps share
+state via <code>self</code> instead of threading arguments.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="command.html"><span class="dir">&larr; previous</span>Command</a><a rel="next" href="composite.html" style="text-align:right"><span class="dir">next &rarr;</span>Composite</a></div>
+</main>
+<script src="app.js"></script>
+
+</body>
+</html>

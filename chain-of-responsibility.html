@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chain of Responsibility &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--behavioral)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Behavioral &middot; <b>Chain of Responsibility</b></div>
+  <div class="pn"><a rel="prev" href="proxy.html">&larr; Proxy</a><a rel="next" href="abstract-factory.html">Abstract Factory &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 14 / 23 &middot; Behavioral</span>
+  <h1>Chain of Responsibility</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="9" width="5" height="6" rx="1"/><rect x="9.5" y="9" width="5" height="6" rx="1"/><rect x="16.5" y="9" width="5" height="6" rx="1"/><path d="M7.5 12h2M14.5 12h2"/></svg></div>
+  <p class="intent">Pass a request along a line of handlers until one deals with it — the shape of every middleware stack.</p>
+</header>
+<h2>The problem</h2>
+<p>Incoming support tickets should be answered by the bot if possible,
+escalated to tier 1, then tier 2, then engineering. The routing logic is one
+function that knows every team's criteria &mdash; and every team edits
+it weekly:</p><pre><code>def route(ticket) -&gt; str:
+    if ticket.kind == &quot;faq&quot;:
+        return &quot;bot answered&quot;
+    elif ticket.kind in (&quot;billing&quot;, &quot;login&quot;) and not ticket.urgent:
+        return &quot;tier1 handled&quot;
+    elif ticket.kind in (&quot;billing&quot;, &quot;login&quot;):
+        return &quot;tier2 handled&quot;
+    elif ticket.kind == &quot;bug&quot;:
+        return &quot;engineering ticket filed&quot;
+    return &quot;nobody could help&quot;</code></pre><h2>The pattern</h2>
+<p>Give each handler two options: deal with the request, or pass it to the
+next handler. Assembly of the chain &mdash; who's in it, in what order &mdash;
+becomes configuration, separated from each handler's private logic:</p><pre><code>class Handler:
+    def __init__(self):
+        self._next: &quot;Handler | None&quot; = None
+
+    def set_next(self, handler: &quot;Handler&quot;) -&gt; &quot;Handler&quot;:
+        self._next = handler
+        return handler                      # enables chaining setup
+
+    def handle(self, ticket) -&gt; str | None:
+        if self._next:
+            return self._next.handle(ticket)
+        return None                         # fell off the end
+
+class Bot(Handler):
+    def handle(self, ticket) -&gt; str | None:
+        if ticket.kind == &quot;faq&quot;:
+            return &quot;bot answered&quot;
+        return super().handle(ticket)
+
+class Tier1(Handler):
+    def handle(self, ticket) -&gt; str | None:
+        if ticket.kind in (&quot;billing&quot;, &quot;login&quot;) and not ticket.urgent:
+            return &quot;tier1 handled&quot;
+        return super().handle(ticket)
+
+class Engineering(Handler):
+    def handle(self, ticket) -&gt; str | None:
+        if ticket.kind == &quot;bug&quot;:
+            return &quot;engineering ticket filed&quot;
+        return super().handle(ticket)
+
+front = Bot()
+front.set_next(Tier1()).set_next(Engineering())
+result = front.handle(ticket) or &quot;escalate to a human&quot;</code></pre><h2>The Pythonic twist</h2>
+<p>The linked-list plumbing is optional ceremony &mdash; a list of callables
+and a loop expresses the same contract in five lines, and is what you'll
+usually ship:</p><pre><code>from typing import Callable, Optional
+
+HandlerFn = Callable[[object], Optional[str]]
+
+def route(ticket, handlers: list[HandlerFn]) -&gt; str:
+    for handle in handlers:
+        result = handle(ticket)
+        if result is not None:              # first non-None wins
+            return result
+    return &quot;escalate to a human&quot;</code></pre>
+<p>The other family member is the <em>processing pipeline</em>, where every
+handler runs (possibly wrapping the rest) instead of the first match winning
+&mdash; that's middleware: auth, rate limiting, logging, each deciding to
+short-circuit or pass through. Same pattern, different termination rule.
+Distinguish it from a dispatch table: a dict maps a <em>key</em> to one
+handler; a chain lets each handler apply arbitrary logic to decide, in
+order.</p><div class="box"><span class="label">In the wild</span>
+<p>WSGI/ASGI and Django middleware, <code>except</code> clauses tried in order
+&mdash; and exception propagation itself is a chain of responsibility up the
+call stack until a handler catches. Python's <code>logging</code> walks the
+logger hierarchy the same way, DOM event bubbling is the browser version, and
+servlet filters / Express middleware are the same idea in other worlds.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>Chains can silently drop requests off the end &mdash; if handling is
+mandatory, make the terminal handler explicit and loud. Debugging &ldquo;who
+handled this?&rdquo; costs real time in long chains, so log the path in
+anything production-grade. And if exactly one handler could ever match per
+key, use a dict &mdash; the chain's flexibility is overhead there.</p></div><div class="box exercise"><span class="label">Exercise 14</span>
+<p>Build an HTTP-ish pipeline as a list of callables:
+<code>rate_limit</code> (rejects after N requests), <code>auth</code>
+(rejects missing token), <code>cache</code> (returns a stored response for
+repeated paths), and <code>app</code> (always answers). Each takes a request
+dict and returns a response or <code>None</code>. Assemble two different
+chains &mdash; public API (all four) and internal admin (no rate limit)
+&mdash; and add a tracing wrapper that records which handler answered each
+request. The trace log is your debugging answer from the pitfalls above.</p><details><summary>Hint</summary><p>The tracer doesn't need to touch the handlers:
+<code>def traced(handlers): return [wrap(h) for h in handlers]</code> where
+<code>wrap</code> records <code>h.__name__</code> when it returns
+non-<code>None</code>. You've just decorated a chain &mdash; patterns
+compose.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="proxy.html"><span class="dir">&larr; previous</span>Proxy</a><a rel="next" href="abstract-factory.html" style="text-align:right"><span class="dir">next &rarr;</span>Abstract Factory</a></div>
+</main>
+<script src="app.js"></script>
+
+</body>
+</html>

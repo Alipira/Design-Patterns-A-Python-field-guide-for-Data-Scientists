@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Facade &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--structural)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Structural &middot; <b>Facade</b></div>
+  <div class="pn"><a rel="prev" href="decorator.html">&larr; Decorator</a><a rel="next" href="command.html">Command &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 08 / 23 &middot; Structural &middot; Start here</span>
+  <h1>Facade</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="4" width="6" height="6" rx="1" stroke-dasharray="2.5 2"/><rect x="15.5" y="7" width="5.5" height="6" rx="1" stroke-dasharray="2.5 2"/><rect x="3" y="9" width="10.5" height="11" rx="1.5"/></svg></div>
+  <p class="intent">Put one simple, intent-level entry point in front of a complicated subsystem — compress the knowledge, keep the escape hatches.</p>
+</header>
+<h2>The problem</h2>
+<p>Converting a video in your codebase requires five subsystem calls in
+exactly the right order, with the right glue between them:</p><pre><code>def convert_the_hard_way(path: str) -&gt; bytes:
+    codec = CodecProbe().detect(path)
+    frames = Decoder(codec).decode(path)
+    frames = FilterChain([&quot;deinterlace&quot;, &quot;scale=720&quot;]).run(frames)
+    stream = Encoder(&quot;h264&quot;).encode(frames)
+    return Muxer(&quot;mp4&quot;).mux(stream, audio=Decoder(codec).audio(path))</code></pre>
+<p>Three teams have copy-pasted this ritual; two of them forgot the audio
+track. Every caller carries knowledge that belongs to the video subsystem
+&mdash; and when the encoder API changes, the change fans out to all of
+them.</p><h2>The pattern</h2>
+<p>A facade is a front door: one object (or function) that speaks the
+<em>caller's</em> language and internally choreographs the subsystem. The
+complexity doesn't disappear &mdash; it moves to the one place that should
+own it:</p><pre><code>class VideoConverter:
+    def convert(self, path: str, target: str = &quot;mp4&quot;) -&gt; bytes:
+        codec = CodecProbe().detect(path)
+        decoder = Decoder(codec)
+        frames = FilterChain([&quot;deinterlace&quot;, &quot;scale=720&quot;]).run(
+            decoder.decode(path))
+        stream = Encoder(&quot;h264&quot;).encode(frames)
+        return Muxer(target).mux(stream, audio=decoder.audio(path))
+
+# every caller, forever:
+# VideoConverter().convert(&quot;clip.mov&quot;)</code></pre><div class="demo"><span class="label">Try it — live demo</span>
+<div>
+  <button id="fc-facade">VideoConverter().convert("clip.mov")</button>
+  <button id="fc-manual">what it replaced</button>
+</div>
+<div class="out" id="fc-out"></div>
+<p class="note">One intent-level call, five subsystem calls hidden behind it. The complexity moved; it didn't vanish.</p></div><h2>The Pythonic twist</h2>
+<p>In Python a facade is very often just <em>a module with functions</em>.
+The canonical story is <code>requests</code>: underneath sits connection
+pooling, TLS negotiation, redirects, cookies &mdash; and the facade is
+<code>requests.get(url)</code>. The standard library does it too:
+<code>subprocess.run()</code> fronts the <code>Popen</code> machinery,
+<code>shutil.make_archive()</code> fronts <code>zipfile</code>/<code>tarfile</code>.
+The design discipline that separates a facade from a god object:</p>
+<ul>
+<li><strong>It orchestrates, it doesn't own.</strong> Business logic stays in
+the subsystem; the facade sequences calls and translates errors.</li>
+<li><strong>Escape hatches stay open.</strong> The subsystem remains importable
+for the 5% of callers who need <code>Encoder</code> directly &mdash; a facade
+is a default path, not a wall.</li>
+<li><strong>It speaks caller vocabulary.</strong> <code>convert(path,
+"mp4")</code>, not <code>run_pipeline(ProbeConfig(...))</code>.</li>
+</ul><div class="box"><span class="label">In the wild</span>
+<p><code>requests</code> over <code>urllib3</code>, <code>pathlib.Path</code>
+over the <code>os</code>/<code>os.path</code>/<code>glob</code> sprawl,
+<code>subprocess.run</code> over <code>Popen</code>, <code>print</code> over
+<code>sys.stdout</code>, <code>json.dumps</code> over encoder classes. Nearly
+every &ldquo;high-level interface&rdquo; note in the standard library docs is
+announcing a facade.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>Don't facade a subsystem of one class, and don't let the facade accrete
+logic until it <em>is</em> the subsystem (the god-object failure mode). If
+callers constantly bypass it, the abstraction is wrong &mdash; listen to that
+signal rather than adding parameters until the simple front door has fifteen
+knobs and reproduces the complexity it was hiding.</p></div><div class="box exercise"><span class="label">Exercise 08</span>
+<p>Write a <code>deploy(app_name)</code> facade over five stub subsystems:
+<code>Git.pull()</code>, <code>DockerBuild.build(tag)</code>,
+<code>Registry.push(tag)</code>, <code>Kubernetes.rollout(tag)</code>,
+<code>HealthCheck.wait(app_name)</code> (each can just print and return a
+value). Requirements: a failure at any step raises <code>DeployError</code>
+naming the step; the subsystems remain individually importable; and a unit
+test drives <code>deploy</code> with fakes injected via keyword arguments
+&mdash; which will force you to decide how the facade acquires its
+collaborators.</p><details><summary>Hint</summary><p>Signature that makes testing trivial: <code>def deploy(app,
+*, git=None, builder=None, ...)</code> with <code>git = git or Git()</code>
+defaults. Wrap each step in <code>try/except Exception as e: raise
+DeployError(f"push failed: {e}") from e</code> &mdash; error translation is
+half of what real facades do.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="decorator.html"><span class="dir">&larr; previous</span>Decorator</a><a rel="next" href="command.html" style="text-align:right"><span class="dir">next &rarr;</span>Command</a></div>
+</main>
+<script src="app.js"></script>
+<script>
+(function () {
+  var out = document.getElementById("fc-out");
+  function facade() {
+    out.textContent = [">>> VideoConverter().convert(\"clip.mov\")",
+      "  probe: codec = prores", "  decode: 1420 frames", "  filter: deinterlace, scale=720",
+      "  encode: h264", "  mux: mp4 + audio", "b'\\x00\\x00\\x00\\x18ftypmp4...'  # 12.4 MB"].join("\n");
+    document.getElementById("fc-facade").classList.add("on");
+    document.getElementById("fc-manual").classList.remove("on");
+  }
+  function manual() {
+    out.textContent = ["# the ritual every caller used to copy-paste:",
+      "codec  = CodecProbe().detect(path)", "frames = Decoder(codec).decode(path)",
+      "frames = FilterChain([\"deinterlace\", \"scale=720\"]).run(frames)",
+      "stream = Encoder(\"h264\").encode(frames)",
+      "video  = Muxer(\"mp4\").mux(stream, audio=Decoder(codec).audio(path))",
+      "# ...and two teams forgot the audio line"].join("\n");
+    document.getElementById("fc-manual").classList.add("on");
+    document.getElementById("fc-facade").classList.remove("on");
+  }
+  document.getElementById("fc-facade").addEventListener("click", facade);
+  document.getElementById("fc-manual").addEventListener("click", manual);
+  facade();
+})();</script>
+</body>
+</html>

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Abstract Factory &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--creational)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Creational &middot; <b>Abstract Factory</b></div>
+  <div class="pn"><a rel="prev" href="chain-of-responsibility.html">&larr; Chain of Responsibility</a><a rel="next" href="prototype.html">Prototype &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 15 / 23 &middot; Creational</span>
+  <h1>Abstract Factory</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5" stroke-dasharray="2.5 2"/><rect x="13" y="13" width="7" height="7" rx="1.5" stroke-dasharray="2.5 2"/></svg></div>
+  <p class="intent">Create whole <em>families</em> of related objects that are guaranteed to match — a factory of factories.</p>
+</header>
+<h2>The problem</h2>
+<p>Your app ships a light theme and a dark theme. Buttons, checkboxes, and
+scrollbars each have a variant per theme &mdash; and one Friday deploy, a
+screen renders a <code>DarkButton</code> next to a <code>LightCheckbox</code>,
+because nothing in the code prevents mixing families:</p><pre><code>def build_toolbar(theme: str):
+    button = DarkButton() if theme == &quot;dark&quot; else LightButton()
+    checkbox = LightCheckbox()   # oops -- forgot the theme check here
+    return button, checkbox</code></pre><h2>The pattern</h2>
+<p>Abstract Factory bundles the creation of a whole family behind one
+interface. The client asks the factory for parts; it can't mismatch them,
+because the factory it holds only knows one family:</p><pre><code>from typing import Protocol
+
+class Button(Protocol):
+    def render(self) -&gt; str: ...
+
+class Checkbox(Protocol):
+    def render(self) -&gt; str: ...
+
+class ThemeFactory(Protocol):
+    def create_button(self) -&gt; Button: ...
+    def create_checkbox(self) -&gt; Checkbox: ...
+
+class LightButton:
+    def render(self) -&gt; str: return &quot;[ light button ]&quot;
+
+class LightCheckbox:
+    def render(self) -&gt; str: return &quot;[x] light checkbox&quot;
+
+class DarkButton:
+    def render(self) -&gt; str: return &quot;[ dark button ]&quot;
+
+class DarkCheckbox:
+    def render(self) -&gt; str: return &quot;[x] dark checkbox&quot;
+
+class LightTheme:
+    def create_button(self) -&gt; Button: return LightButton()
+    def create_checkbox(self) -&gt; Checkbox: return LightCheckbox()
+
+class DarkTheme:
+    def create_button(self) -&gt; Button: return DarkButton()
+    def create_checkbox(self) -&gt; Checkbox: return DarkCheckbox()
+
+def build_toolbar(theme: ThemeFactory) -&gt; str:
+    return theme.create_button().render() + &quot; &quot; + theme.create_checkbox().render()
+
+build_toolbar(DarkTheme())   # consistency is now structural, not disciplinary</code></pre><h2>The Pythonic twist</h2>
+<p>A &ldquo;family of constructors&rdquo; doesn't need a class hierarchy in
+Python &mdash; a frozen dataclass of callables, or even a module, is a
+perfectly good factory. This version is flatter and just as safe:</p><pre><code>from dataclasses import dataclass
+from typing import Callable
+
+@dataclass(frozen=True)
+class Theme:
+    button: Callable[[], &quot;Button&quot;]
+    checkbox: Callable[[], &quot;Checkbox&quot;]
+
+LIGHT = Theme(button=LightButton, checkbox=LightCheckbox)
+DARK = Theme(button=DarkButton, checkbox=DarkCheckbox)
+
+def build_toolbar(theme: Theme) -&gt; str:
+    return theme.button().render() + &quot; &quot; + theme.checkbox().render()</code></pre>
+<p>The single most valuable use in day-to-day work is <strong>testing</strong>:
+a <code>prod</code> family (real mailer, real payment gateway) and a
+<code>test</code> family (fakes), selected once at startup. Your business
+logic takes the factory and never knows which world it's in &mdash; that's
+dependency injection with a family guarantee.</p><div class="box"><span class="label">In the wild</span>
+<p>DB-API drivers are families: <code>psycopg</code> and <code>sqlite3</code>
+each produce matching connections and cursors that must not be mixed.
+Matplotlib backends create consistent canvas + renderer sets. Test suites that
+swap a <code>ServiceFactory</code> for a <code>FakeServiceFactory</code> use
+exactly this shape, as do cloud-provider abstraction layers (an AWS family vs
+a GCP family of clients).</p></div><div class="box"><span class="label">When not to use it</span>
+<p>One family? It's not this pattern &mdash; it's just constructors. One
+product per family? That's a plain Factory Method. Abstract Factory earns its
+weight only with <em>two or more families</em> of <em>two or more products</em>
+whose consistency actually matters; below that threshold it's architecture
+cosplay.</p></div><div class="box exercise"><span class="label">Exercise 15</span>
+<p>Build an <code>OrderService</code> that takes a service family with
+<code>mailer()</code> and <code>payments()</code>. Implement a
+<code>ProdServices</code> family (methods can just return objects that print)
+and a <code>FakeServices</code> family whose fakes record calls in lists. Write
+a test that places an order through <code>FakeServices</code> and asserts one
+payment was captured and one email queued &mdash; without monkeypatching
+anything.</p><details><summary>Hint</summary><p>The assertion target lives on the fake:
+<code>fake.mailer_instance.sent == ["order #1 confirmed"]</code>. If your test
+needs <code>unittest.mock.patch</code>, the factory isn't being injected
+properly &mdash; the whole point is that swapping the family requires zero
+patching.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="chain-of-responsibility.html"><span class="dir">&larr; previous</span>Chain of Responsibility</a><a rel="next" href="prototype.html" style="text-align:right"><span class="dir">next &rarr;</span>Prototype</a></div>
+</main>
+<script src="app.js"></script>
+
+</body>
+</html>

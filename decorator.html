@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Decorator &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--structural)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Structural &middot; <b>Decorator</b></div>
+  <div class="pn"><a rel="prev" href="adapter.html">&larr; Adapter</a><a rel="next" href="facade.html">Facade &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 07 / 23 &middot; Structural &middot; Start here</span>
+  <h1>Decorator</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><rect x="7" y="7" width="10" height="10" rx="2"/><rect x="10.3" y="10.3" width="3.4" height="3.4" rx="0.8" fill="currentColor" stroke="none"/></svg></div>
+  <p class="intent">Add responsibilities to an object by wrapping it in same-shaped layers — composition at runtime instead of subclasses at compile time.</p>
+</header>
+<h2>The problem</h2>
+<p>Your export pipeline writes data to a destination. Product keeps adding
+optional behaviors: compression, encryption, base64 for one legacy partner.
+Subclassing melts down immediately &mdash; <code>CompressedWriter</code>,
+<code>EncryptedWriter</code>, <code>CompressedEncryptedWriter</code>,
+<code>Base64CompressedEncryptedWriter</code>&hellip; every combination is a
+class, and the order of operations is frozen into names. The flags-in-one-class
+alternative is no better: an <code>if</code> forest that every feature must
+thread through.</p><h2>The pattern</h2>
+<p>Decorator makes each optional behavior a thin wrapper with the <em>same
+interface</em> as the thing it wraps: do your bit, then delegate inward.
+Because wrapper and wrapped are interchangeable, you can stack any combination
+in any order &mdash; at runtime:</p><pre><code>from typing import Protocol
+
+class Sink(Protocol):
+    def write(self, data: str) -&gt; str: ...
+
+class FileSink:
+    def write(self, data: str) -&gt; str:
+        return f&quot;wrote({data})&quot;
+
+class Gzip:
+    def __init__(self, inner: Sink):
+        self.inner = inner
+    def write(self, data: str) -&gt; str:
+        return self.inner.write(f&quot;gzip({data})&quot;)     # transform, delegate
+
+class Encrypt:
+    def __init__(self, inner: Sink):
+        self.inner = inner
+    def write(self, data: str) -&gt; str:
+        return self.inner.write(f&quot;aes({data})&quot;)
+
+class Base64:
+    def __init__(self, inner: Sink):
+        self.inner = inner
+    def write(self, data: str) -&gt; str:
+        return self.inner.write(f&quot;b64({data})&quot;)
+
+sink = Encrypt(Gzip(FileSink()))       # compose the exact stack you need
+sink.write(&quot;report&quot;)                   # &#x27;wrote(gzip(aes(report)))&#x27;</code></pre><div class="demo"><span class="label">Try it — live demo</span>
+<div>
+  <button id="dc-gzip">wrap in Gzip</button>
+  <button id="dc-enc">wrap in Encrypt</button>
+  <button id="dc-b64">wrap in Base64</button>
+  <button id="dc-reset">reset</button>
+</div>
+<div class="out" id="dc-out"></div>
+<p class="note">Each click wraps the current stack in one more layer &mdash; same interface outside, new behavior inside. Order is yours to choose.</p></div><h2>The Pythonic twist</h2>
+<p>Yes &mdash; this is <em>that</em> decorator. Python's <code>@</code> syntax
+is the GoF pattern applied to callables: a function that takes a function and
+returns a same-shaped function, applied at definition time. The mental
+translation:</p><pre><code>import functools
+import time
+
+def timed(fn):
+    @functools.wraps(fn)               # preserve __name__, __doc__, etc.
+    def wrapper(*args, **kwargs):
+        t0 = time.perf_counter()
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            print(f&quot;{fn.__name__}: {time.perf_counter() - t0:.4f}s&quot;)
+    return wrapper
+
+@timed                                  # sugar for: fetch = timed(fetch)
+def fetch(url: str) -&gt; str:
+    return &quot;...&quot;</code></pre>
+<p>Two differences worth holding onto. The GoF form wraps <em>objects at
+runtime</em> and can be added or removed per instance; <code>@</code> wraps
+<em>the function for everyone</em> at import time &mdash; but nothing stops
+you writing <code>fast_fetch = timed(fetch)</code> by hand when you want the
+runtime version. And always use <code>functools.wraps</code>: an anonymous
+stack of <code>wrapper</code> frames is the debugging tax this pattern
+charges, so pay it down where the language lets you.</p><div class="box"><span class="label">In the wild</span>
+<p>Python's <code>io</code> stack is textbook GoF: <code>open()</code> hands
+you a <code>TextIOWrapper</code> wrapping a <code>BufferedReader</code>
+wrapping a raw <code>FileIO</code> &mdash; three decorators before your first
+<code>read()</code>. <code>gzip.open()</code> adds one more layer to the same
+onion. WSGI/ASGI middleware wraps applications in applications;
+<code>functools.lru_cache</code>, <code>@login_required</code>, and pytest
+fixtures' wrapping behavior are all the callable form.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>If a behavior is mandatory, put it in the class &mdash; decorators are for
+<em>optional, combinable</em> responsibilities. Deep stacks hurt: tracebacks
+become wrapper archaeology, and <code>isinstance</code> checks break because
+the outermost layer isn't the class anyone expects (interrogate behavior, not
+type). If layers need to know about <em>each other</em> &mdash; encryption
+that must run before compression for correctness &mdash; that ordering rule
+belongs in a builder or facade that assembles the stack, not in the layers.</p></div><div class="box exercise"><span class="label">Exercise 07</span>
+<p>Part one, object form: given a base <code>EmailNotifier</code> with
+<code>notify(msg)</code>, write decorators <code>Timestamped</code> (prefixes
+the time), <code>Deduplicated</code> (drops a message identical to the last
+one), and <code>SlackMirror</code> (also prints to a fake Slack). Compose them
+two different ways and explain one observable difference the order makes.
+Part two, callable form: write <code>@retry(times=3, delay=0)</code> that
+re-invokes a failing function, uses <code>functools.wraps</code>, and re-raises
+the final exception. Prove <code>fn.__name__</code> survived.</p><details><summary>Hint</summary><p><code>retry</code> is a decorator <em>factory</em>: three
+levels &mdash; <code>retry(times)</code> returns <code>deco(fn)</code> returns
+<code>wrapper(*args)</code>. For ordering:
+<code>Deduplicated(Timestamped(base))</code> almost never dedups (timestamps
+make every message unique) while <code>Timestamped(Deduplicated(base))</code>
+works &mdash; that asymmetry is your explanation.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="adapter.html"><span class="dir">&larr; previous</span>Adapter</a><a rel="next" href="facade.html" style="text-align:right"><span class="dir">next &rarr;</span>Facade</a></div>
+</main>
+<script src="app.js"></script>
+<script>
+(function () {
+  var layers = [];
+  var names = {gzip: "Gzip", enc: "Encrypt", b64: "Base64"};
+  var ops = {gzip: "gzip", enc: "aes", b64: "b64"};
+  function render() {
+    var expr = "FileSink()", payload = "report";
+    layers.forEach(function (k) { expr = names[k] + "(" + expr + ")"; });
+    for (var i = layers.length - 1; i >= 0; i--) payload = ops[layers[i]] + "(" + payload + ")";
+    document.getElementById("dc-out").textContent =
+      ">>> sink = " + expr + "\n>>> sink.write(\"report\")\n'wrote(" + payload + ")'";
+  }
+  ["gzip", "enc", "b64"].forEach(function (k) {
+    document.getElementById("dc-" + k).addEventListener("click", function () {
+      layers.push(k); render();
+    });
+  });
+  document.getElementById("dc-reset").addEventListener("click", function () {
+    layers = []; render();
+  });
+  render();
+})();</script>
+</body>
+</html>

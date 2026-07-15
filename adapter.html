@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adapter &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--structural)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Structural &middot; <b>Adapter</b></div>
+  <div class="pn"><a rel="prev" href="builder.html">&larr; Builder</a><a rel="next" href="decorator.html">Decorator &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 06 / 23 &middot; Structural &middot; Start here</span>
+  <h1>Adapter</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="8" width="7" height="8" rx="1.5"/><circle cx="18.5" cy="12" r="3.4"/><path d="M10 12h1.6l1.4-2 1.6 4 1.2-2h1.3"/></svg></div>
+  <p class="intent">Make an interface you can't change fit the interface your code expects — a translator between two shapes.</p>
+</header>
+<h2>The problem</h2>
+<p>Your alerting code is written against a clean protocol you designed:</p><pre><code>from typing import Protocol
+
+class Notifier(Protocol):
+    def send(self, message: str) -&gt; None: ...
+
+def alert_on_call(notifier: Notifier) -&gt; None:
+    notifier.send(&quot;Server down!&quot;)</code></pre>
+<p>Then procurement buys an SMS vendor whose SDK looks like this &mdash; and
+you can't touch it, it's their package:</p><pre><code>class LegacySmsGateway:
+    # vendor code: do not modify
+    def deliver_payload(self, xml: str, priority: int) -&gt; None:
+        print(f&quot;SMS[{priority}]: {xml}&quot;)</code></pre>
+<p>Wrong method name, wrong argument format, wrong everything. The naive fix
+&mdash; sprinkling <code>if isinstance(notifier, LegacySmsGateway)</code>
+through your alerting code &mdash; infects every caller with vendor
+knowledge.</p><h2>The pattern</h2>
+<p>Adapter is a small class that <em>implements the interface you want</em>
+and <em>holds the object you have</em>, translating between them. All the
+impedance mismatch is quarantined in one file:</p><pre><code>class SmsAdapter:
+    def __init__(self, gateway: LegacySmsGateway, priority: int = 1):
+        self._gateway = gateway
+        self._priority = priority
+
+    def send(self, message: str) -&gt; None:            # the interface you want
+        xml = f&quot;&lt;sms&gt;&lt;body&gt;{message}&lt;/body&gt;&lt;/sms&gt;&quot;   # the translation
+        self._gateway.deliver_payload(xml, self._priority)
+
+alert_on_call(SmsAdapter(LegacySmsGateway()))   # client code: unchanged</code></pre><div class="demo"><span class="label">Try it — live demo</span>
+<div>
+  <button id="ad-email" class="on">EmailService()</button>
+  <button id="ad-sms">SmsAdapter(LegacySmsGateway())</button>
+</div>
+<div class="out" id="ad-out"></div>
+<p class="note">The client line never changes. The adapter translates a clean send() into the vendor's XML-and-priority ritual.</p></div><h2>The Pythonic twist</h2>
+<p>Duck typing does half the work: the adapter doesn't inherit from anything,
+it just <em>has the right shape</em>, and <code>Protocol</code> lets the type
+checker verify it. And when the mismatch is a single callable,
+the adapter shrinks to a lambda or <code>functools.partial</code>:</p><pre><code>from functools import partial
+
+# a library wants callback(event) but your handler is handle(logger, event)
+def handle(logger, event) -&gt; None: ...
+
+register_callback = lambda cb: None   # stand-in for the library hook
+register_callback(partial(handle, my_logger := object()))</code></pre>
+<p>One discipline rule from years of reviewing these: <strong>adapters
+translate, they don't think.</strong> The moment business rules creep into an
+adapter, you've hidden logic in the least discoverable place in the codebase.
+Retry policies, formatting decisions, filtering &mdash; those belong in real
+components; the adapter's only job is shape conversion.</p><div class="box"><span class="label">In the wild</span>
+<p><code>io.TextIOWrapper</code> adapts a byte stream to a text interface
+&mdash; it's the &ldquo;T&rdquo; in every <code>open()</code> call.
+<code>socket.makefile()</code> adapts a socket to a file. <code>os.PathLike</code>
+lets <code>pathlib.Path</code> objects flow into APIs written for strings.
+The <code>requests</code> library literally names its pluggable transport layer
+<code>HTTPAdapter</code>.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>If you own both sides, don't adapt &mdash; change one interface and delete
+the mismatch. Beware adapter <em>chains</em> (A adapts B adapts C): each hop
+is a place for bugs and a lie about the real shape of the system. And if the
+two interfaces differ in <em>semantics</em>, not just shape (sync vs async,
+at-most-once vs at-least-once), an adapter can't honestly bridge that &mdash;
+that's a redesign, not a wrapper.</p></div><div class="box exercise"><span class="label">Exercise 06</span>
+<p>Your new monitoring code expects the protocol below, but the hardware team
+ships <code>OldTemperatureSensor</code>. Write <code>SensorAdapter</code> so
+<code>log_reading</code> works unchanged. Then the twist: the old sensor
+sometimes returns <code>"ERR"</code> &mdash; decide where that translation
+belongs and defend your choice in a comment.</p><pre><code>from typing import Protocol
+
+class Sensor(Protocol):
+    def celsius(self) -&gt; float: ...
+
+def log_reading(sensor: Sensor) -&gt; None:
+    print(f&quot;{sensor.celsius():.1f} C&quot;)
+
+class OldTemperatureSensor:
+    # vendor code: returns fahrenheit as a string, or &quot;ERR&quot;
+    def read_fahrenheit(self) -&gt; str:
+        return &quot;98.6&quot;</code></pre><details><summary>Hint</summary><p>Conversion: <code>(f - 32) * 5 / 9</code>. For
+<code>"ERR"</code>: raising a domain exception (<code>SensorReadError</code>)
+from the adapter keeps the protocol honest &mdash; returning a magic value
+like <code>float("nan")</code> just moves the vendor's weirdness into your
+domain.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="builder.html"><span class="dir">&larr; previous</span>Builder</a><a rel="next" href="decorator.html" style="text-align:right"><span class="dir">next &rarr;</span>Decorator</a></div>
+</main>
+<script src="app.js"></script>
+<script>
+(function () {
+  var out = document.getElementById("ad-out");
+  function pick(which) {
+    var lines = [">>> alert_on_call(notifier)", ">>> notifier.send(\"Server down!\")"];
+    if (which === "email") {
+      lines.push("EMAIL to oncall@example.com: Server down!");
+    } else {
+      lines.push("  # adapter translates:");
+      lines.push("  # gateway.deliver_payload(\"<sms><body>Server down!</body></sms>\", 1)");
+      lines.push("SMS[1]: <sms><body>Server down!</body></sms>");
+    }
+    out.textContent = lines.join("\n");
+    document.getElementById("ad-email").classList.toggle("on", which === "email");
+    document.getElementById("ad-sms").classList.toggle("on", which === "sms");
+  }
+  document.getElementById("ad-email").addEventListener("click", function () { pick("email"); });
+  document.getElementById("ad-sms").addEventListener("click", function () { pick("sms"); });
+  pick("email");
+})();</script>
+</body>
+</html>

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Observer &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--behavioral)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Behavioral &middot; <b>Observer</b></div>
+  <div class="pn"><a rel="prev" href="strategy.html">&larr; Strategy</a><a rel="next" href="factory-method.html">Factory Method &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 02 / 23 &middot; Behavioral &middot; Start here</span>
+  <h1>Observer</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="12" r="2.6" fill="currentColor" stroke="none"/><path d="M7.5 10.7 16.2 5.7M7.9 12h8.3M7.5 13.3 16.2 18.3"/><circle cx="18.4" cy="5" r="1.9"/><circle cx="18.4" cy="12" r="1.9"/><circle cx="18.4" cy="19" r="1.9"/></svg></div>
+  <p class="intent">Let objects react to another object's events without the publisher knowing who's listening — the pattern inside every event system you've ever used.</p>
+</header>
+<h2>The problem</h2>
+<p>When an order is placed, four things must happen &mdash; and the order
+service currently does all of them personally:</p><pre><code>class OrderService:
+    def place_order(self, order) -&gt; None:
+        self.save(order)
+        EmailService().send_receipt(order)        # coupling #1
+        AnalyticsClient().track(&quot;order&quot;, order)   # coupling #2
+        InventoryService().reserve(order)         # coupling #3
+        # next sprint: loyalty points, fraud check, webhooks...
+
+    def save(self, order) -&gt; None: ...</code></pre>
+<p><code>place_order</code> has become a bulletin board of other teams'
+requirements. Every new reaction edits it, it can't be tested without four
+services, and the analytics team files a ticket against <em>your</em> module
+to change <em>their</em> tracking.</p><h2>The pattern</h2>
+<p>Invert the dependency: the publisher keeps a list of anonymous subscribers
+and notifies them; subscribers register themselves. The publisher's last
+coupling to its consumers disappears:</p><pre><code>from typing import Protocol
+
+class Observer(Protocol):
+    def update(self, event: str, payload) -&gt; None: ...
+
+class Publisher:
+    def __init__(self):
+        self._observers: list[Observer] = []
+
+    def attach(self, obs: Observer) -&gt; None:
+        self._observers.append(obs)
+
+    def detach(self, obs: Observer) -&gt; None:
+        self._observers.remove(obs)
+
+    def notify(self, event: str, payload) -&gt; None:
+        for obs in list(self._observers):     # copy: observers may detach
+            obs.update(event, payload)
+
+class OrderService(Publisher):
+    def place_order(self, order) -&gt; None:
+        self.save(order)
+        self.notify(&quot;order_placed&quot;, order)    # done. no names, no coupling.
+
+    def save(self, order) -&gt; None: ...
+
+class EmailReceipts:
+    def update(self, event: str, payload) -&gt; None:
+        print(f&quot;emailing receipt for {payload}&quot;)
+
+orders = OrderService()
+orders.attach(EmailReceipts())</code></pre><div class="demo"><span class="label">Try it — live demo</span>
+<div>
+  <button id="ob-tick">feed.publish(next_price)</button>
+  <button id="ob-chart" class="on">chart subscribed</button>
+  <button id="ob-sms">sms alerts off</button>
+</div>
+<div class="out" id="ob-out">Publish a few prices, then toggle subscribers between ticks.</div>
+<p class="note">The feed never names its subscribers &mdash; it just walks the list. Attach and detach at runtime and publish again.</p></div><h2>The Pythonic twist</h2>
+<p>Functions being first-class flattens this too: the subscriber list is
+usually just a list of callables, and that's the whole EventEmitter every
+framework ships:</p><pre><code>from collections import defaultdict
+from typing import Callable
+
+class EventBus:
+    def __init__(self):
+        self._subs: dict[str, list[Callable]] = defaultdict(list)
+
+    def on(self, event: str, fn: Callable) -&gt; None:
+        self._subs[event].append(fn)
+
+    def emit(self, event: str, *args, **kwargs) -&gt; None:
+        for fn in list(self._subs[event]):
+            try:
+                fn(*args, **kwargs)
+            except Exception as e:            # one bad listener
+                print(f&quot;observer error: {e!r}&quot;)   # must not kill the rest</code></pre>
+<p>Three production lessons baked into those few lines. Iterate over a
+<em>copy</em>, because handlers that unsubscribe themselves mid-notify
+otherwise skip their neighbor. Isolate errors, because the email service
+being down should not stop inventory reservation. And mind lifetimes: a
+subject holding strong references keeps observers alive forever &mdash; for
+long-lived publishers, register bound methods via
+<code>weakref.WeakMethod</code> or provide disciplined <code>detach</code>
+calls, or you've built a slow memory leak.</p><div class="box"><span class="label">In the wild</span>
+<p>Django signals (<code>post_save</code>), Qt's signals and slots,
+<code>asyncio</code>'s <code>add_done_callback</code>, every GUI
+<code>bind()</code>/<code>addEventListener</code>, file-system watchers, and
+&mdash; scaled up to architecture &mdash; pub/sub systems like Kafka or Redis
+channels: same pattern, network-sized.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>Observer trades coupling for <em>visibility</em>: control flow becomes
+&ldquo;spooky action at a distance,&rdquo; and debugging &ldquo;what changed
+this?&rdquo; means hunting subscribers. Avoid it when there's exactly one
+consumer (call it), when reactions must happen in a guaranteed order
+(publish/subscribe promises none), or when observers trigger events that
+trigger observers &mdash; feedback cascades are this pattern's signature
+outage.</p></div><div class="box exercise"><span class="label">Exercise 02</span>
+<p>Extend the <code>EventBus</code> above with: <code>off(event, fn)</code>
+to unsubscribe; <code>once(event, fn)</code> that auto-unsubscribes after the
+first delivery (careful &mdash; the naive version mutates the list during
+iteration); and error isolation that <em>collects</em> exceptions and raises
+a single <code>BatchError(errors)</code> after all observers ran. Write tests
+proving a self-unsubscribing handler doesn't make its neighbor get skipped.</p><details><summary>Hint</summary><p><code>once</code> wraps <code>fn</code> in a closure that
+calls <code>self.off(event, wrapper)</code> then <code>fn(...)</code> &mdash;
+note it must unsubscribe the <em>wrapper</em>, which means the wrapper needs
+a reference to itself: define it with <code>def</code>, not
+<code>lambda</code>. The neighbor-skipping test: subscribe two handlers, make
+the first a <code>once</code>, emit, assert both ran.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="strategy.html"><span class="dir">&larr; previous</span>Strategy</a><a rel="next" href="factory-method.html" style="text-align:right"><span class="dir">next &rarr;</span>Factory Method</a></div>
+</main>
+<script src="app.js"></script>
+<script>
+(function () {
+  var price = 100.0, chart = true, sms = false;
+  var out = document.getElementById("ob-out");
+  var log = [];
+  document.getElementById("ob-tick").addEventListener("click", function () {
+    price = Math.max(1, price + (Math.random() * 8 - 4));
+    var p = price.toFixed(2);
+    var lines = [">>> feed.publish(" + p + ")"];
+    if (chart) lines.push("    ChartDisplay.update(" + p + ")   # redraws");
+    if (sms) lines.push("    SmsAlerts.update(" + p + ")     # texts on-call");
+    if (!chart && !sms) lines.push("    # no observers attached -- publish is a no-op");
+    log = log.concat(lines).slice(-9);
+    out.textContent = log.join("\n");
+  });
+  function label() {
+    var c = document.getElementById("ob-chart"), s = document.getElementById("ob-sms");
+    c.textContent = chart ? "chart subscribed" : "chart detached";
+    c.classList.toggle("on", chart);
+    s.textContent = sms ? "sms alerts on" : "sms alerts off";
+    s.classList.toggle("on", sms);
+  }
+  document.getElementById("ob-chart").addEventListener("click", function () { chart = !chart; label(); });
+  document.getElementById("ob-sms").addEventListener("click", function () { sms = !sms; label(); });
+  label();
+})();</script>
+</body>
+</html>

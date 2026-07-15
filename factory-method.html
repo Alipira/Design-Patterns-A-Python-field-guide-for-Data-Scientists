@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factory Method &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--creational)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Creational &middot; <b>Factory Method</b></div>
+  <div class="pn"><a rel="prev" href="observer.html">&larr; Observer</a><a rel="next" href="singleton.html">Singleton &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 03 / 23 &middot; Creational &middot; Start here</span>
+  <h1>Factory Method</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="9" width="8" height="8" rx="1.5"/><path d="M11 13h4.5"/><path d="M14.3 10.8 16.5 13l-2.2 2.2"/><circle cx="19.3" cy="13" r="2.3"/></svg></div>
+  <p class="intent">Let callers ask for an object by intent, not by concrete class — so the decision of <em>which</em> class to instantiate lives in exactly one place.</p>
+</header>
+<h2>The problem</h2>
+<p>Your reporting service exports data in several formats. The knowledge of
+<em>which class handles which format</em> has leaked into three different call
+sites &mdash; the API handler, the CLI, and the nightly job:</p><pre><code>def export_report(rows: list[dict], fmt: str) -&gt; str:
+    if fmt == &quot;json&quot;:
+        exporter = JsonExporter(indent=2)
+    elif fmt == &quot;csv&quot;:
+        exporter = CsvExporter(delimiter=&quot;,&quot;)
+    elif fmt == &quot;xml&quot;:
+        exporter = XmlExporter(root_tag=&quot;report&quot;)
+    else:
+        raise ValueError(f&quot;unknown format: {fmt}&quot;)
+    return exporter.export(rows)
+
+# ...and the same if/elif chain lives in cli.py and nightly_job.py</code></pre>
+<p>Adding a Parquet exporter now means hunting down every copy of that chain
+&mdash; the classic <em>shotgun surgery</em> smell. Worse, the calling code is
+coupled to every concrete exporter and its constructor arguments, so it has to
+change whenever any of them does.</p><h2>The pattern</h2>
+<p>Factory Method says: put object creation behind a method whose <em>return
+type is an abstraction</em>, and let something else &mdash; a subclass, a
+registry, a config value &mdash; decide the concrete class. Callers program
+against the interface and never say a concrete name again.</p>
+<p>The textbook GoF form uses subclassing: a creator class does its work
+against the product interface and defers one creation step to subclasses.
+Notice how <code>run()</code> never knows which exporter exists:</p><pre><code>from typing import Protocol
+from abc import ABC, abstractmethod
+
+class Exporter(Protocol):
+    def export(self, rows: list[dict]) -&gt; str: ...
+
+class ReportJob(ABC):
+    def run(self, rows: list[dict]) -&gt; str:
+        exporter = self.create_exporter()   # &lt;- the factory method
+        payload = exporter.export(rows)
+        self.archive(payload)
+        return payload
+
+    @abstractmethod
+    def create_exporter(self) -&gt; Exporter: ...
+
+    def archive(self, payload: str) -&gt; None: ...
+
+class JsonReportJob(ReportJob):
+    def create_exporter(self) -&gt; Exporter:
+        return JsonExporter(indent=2)
+
+class CsvReportJob(ReportJob):
+    def create_exporter(self) -&gt; Exporter:
+        return CsvExporter(delimiter=&quot;,&quot;)</code></pre><h2>The Pythonic twist</h2>
+<p>In Python, classes are objects you can put in a dict &mdash; so the
+subclass-per-product ceremony usually collapses into a <strong>registry</strong>.
+This is the form you'll actually ship: one lookup table, one honest error
+message, and open/closed extension by adding a line (or a decorator):</p><pre><code>EXPORTERS: dict[str, type] = {}
+
+def register(fmt: str):
+    def deco(cls):
+        EXPORTERS[fmt] = cls
+        return cls
+    return deco
+
+@register(&quot;json&quot;)
+class JsonExporter:
+    def export(self, rows: list[dict]) -&gt; str:
+        import json
+        return json.dumps(rows, indent=2)
+
+@register(&quot;csv&quot;)
+class CsvExporter:
+    def export(self, rows: list[dict]) -&gt; str:
+        if not rows:
+            return &quot;&quot;
+        header = &quot;,&quot;.join(rows[0])
+        lines = [&quot;,&quot;.join(str(v) for v in r.values()) for r in rows]
+        return &quot;\n&quot;.join([header, *lines])
+
+def create_exporter(fmt: str) -&gt; &quot;Exporter&quot;:
+    try:
+        return EXPORTERS[fmt]()
+    except KeyError:
+        raise ValueError(f&quot;unknown format {fmt!r}, &quot;
+                         f&quot;expected one of {sorted(EXPORTERS)}&quot;) from None</code></pre><div class="demo"><span class="label">Try it — live demo</span>
+<div>
+  <button id="fm-json" class="on">create_exporter("json")</button>
+  <button id="fm-csv">create_exporter("csv")</button>
+  <button id="fm-xml">create_exporter("xml")</button>
+</div>
+<div class="out" id="fm-out"></div>
+<p class="note">The caller names an intent; the registry picks the class. Adding a format is one new entry &mdash; no call site changes.</p></div><h2>Alternative constructors are factories too</h2>
+<p>Python's idiom for &ldquo;several ways to build the same class&rdquo; is the
+<code>@classmethod</code> constructor &mdash; <code>datetime.fromtimestamp()</code>,
+<code>dict.fromkeys()</code>, <code>Decimal.from_float()</code>. Same intent,
+smallest possible mechanism:</p><pre><code>class Config:
+    def __init__(self, values: dict):
+        self.values = values
+
+    @classmethod
+    def from_toml(cls, path: str) -&gt; &quot;Config&quot;:
+        import tomllib
+        with open(path, &quot;rb&quot;) as f:
+            return cls(tomllib.load(f))
+
+    @classmethod
+    def from_env(cls, prefix: str = &quot;APP_&quot;) -&gt; &quot;Config&quot;:
+        import os
+        vals = {k[len(prefix):].lower(): v
+                for k, v in os.environ.items() if k.startswith(prefix)}
+        return cls(vals)</code></pre><div class="box"><span class="label">In the wild</span>
+<p><code>pathlib.Path("x")</code> secretly hands you a <code>PosixPath</code> or
+<code>WindowsPath</code> &mdash; the constructor itself is a factory method choosing
+a subclass. <code>logging.getLogger(name)</code> decides whether to create or reuse.
+Every <code>@classmethod</code> alternative constructor in the standard library
+(<code>datetime.fromisoformat</code>, <code>int.from_bytes</code>) is this pattern
+in miniature, and plugin systems like <code>importlib.metadata</code> entry points
+are registries at package scale.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>If there is exactly one concrete class and no credible second one on the
+roadmap, <code>JsonExporter()</code> written plainly is better than a factory
+&mdash; indirection you don't need is just a longer stack trace. Add the factory
+when the <em>second</em> implementation arrives, not before. And don't build a
+registry for two entries that change once a decade; an <code>if</code> in one
+single place is honest code.</p></div><div class="box exercise"><span class="label">Exercise 03</span>
+<p>Refactor this payment module so that adding a provider never touches existing
+code. Use a <code>Protocol</code> for the gateway interface and a decorator-based
+registry. Then add a fourth provider, <code>"crypto"</code> (fee: flat 1.0),
+purely by <em>adding</em> code. Bonus: make <code>create_gateway</code> raise a
+helpful error listing valid providers.</p><pre><code>def charge(provider: str, amount: float) -&gt; str:
+    if provider == &quot;stripe&quot;:
+        fee = amount * 0.029 + 0.30
+        return f&quot;stripe charged {amount + fee:.2f}&quot;
+    elif provider == &quot;paypal&quot;:
+        fee = amount * 0.034
+        return f&quot;paypal charged {amount + fee:.2f}&quot;
+    elif provider == &quot;bank&quot;:
+        return f&quot;bank transfer of {amount:.2f} (no fee)&quot;
+    raise ValueError(provider)</code></pre><details><summary>Hint</summary><p>Shape: <code>GATEWAYS: dict[str, type] = {}</code>, a
+<code>@register("stripe")</code> decorator, each gateway a small class with a
+<code>charge(amount) -&gt; str</code> method, and one
+<code>create_gateway(provider)</code> lookup. The <code>charge</code> function
+shrinks to two lines.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="observer.html"><span class="dir">&larr; previous</span>Observer</a><a rel="next" href="singleton.html" style="text-align:right"><span class="dir">next &rarr;</span>Singleton</a></div>
+</main>
+<script src="app.js"></script>
+<script>
+(function () {
+  var rows = [{id: 1, name: "Ada"}, {id: 2, name: "Grace"}];
+  var registry = {
+    json: ["JsonExporter", function (r) { return JSON.stringify(r, null, 2); }],
+    csv:  ["CsvExporter",  function (r) { return "id,name\n" + r.map(function (x) { return x.id + "," + x.name; }).join("\n"); }],
+    xml:  ["XmlExporter",  function (r) { return "<report>\n" + r.map(function (x) { return "  <row id=\"" + x.id + "\">" + x.name + "</row>"; }).join("\n") + "\n</report>"; }]
+  };
+  function pick(fmt) {
+    var e = registry[fmt];
+    document.getElementById("fm-out").textContent =
+      ">>> exporter = create_exporter(\"" + fmt + "\")   # -> " + e[0] + "\n>>> exporter.export(rows)\n" + e[1](rows);
+    ["json", "csv", "xml"].forEach(function (k) {
+      document.getElementById("fm-" + k).classList.toggle("on", k === fmt);
+    });
+  }
+  ["json", "csv", "xml"].forEach(function (k) {
+    document.getElementById("fm-" + k).addEventListener("click", function () { pick(k); });
+  });
+  pick("json");
+})();</script>
+</body>
+</html>

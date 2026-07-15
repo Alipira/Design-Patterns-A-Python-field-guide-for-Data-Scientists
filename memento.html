@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memento &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--behavioral)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Behavioral &middot; <b>Memento</b></div>
+  <div class="pn"><a rel="prev" href="mediator.html">&larr; Mediator</a><a rel="next" href="iterator.html">Iterator &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 20 / 23 &middot; Behavioral</span>
+  <h1>Memento</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4.5" width="13" height="15" rx="2"/><path d="M7 9h7M7 12.5h7M7 16h4"/><path d="M21.3 7a3.2 3.2 0 1 1-1.1-2.4"/><path d="M20.6 2.7l.2 2.1-2.1.2"/></svg></div>
+  <p class="intent">Snapshot an object's state into an opaque token so it can be restored later — undo by photograph instead of by reversal.</p>
+</header>
+<h2>The problem</h2>
+<p>Your editor needs undo, but unlike the Command lesson's neatly reversible
+inserts and deletes, some operations are hard to invert &mdash; a regex
+replace-all, a reflow, a plugin that touched everything. Writing an
+<code>undo()</code> that reconstructs the before-state of an arbitrary
+operation is somewhere between hard and impossible. What's easy is
+<em>photographing</em> the state before the operation runs.</p><h2>The pattern</h2>
+<p>Three roles: the <em>originator</em> (the editor) produces and consumes
+snapshots of its own state; the <em>memento</em> is that snapshot, opaque to
+everyone else; the <em>caretaker</em> (the history) stores mementos without
+looking inside:</p><pre><code>from dataclasses import dataclass
+from collections import deque
+
+@dataclass(frozen=True)
+class _Snapshot:                      # the memento: frozen, private-ish
+    text: str
+    cursor: int
+
+class Editor:                         # the originator
+    def __init__(self):
+        self.text = &quot;&quot;
+        self.cursor = 0
+
+    def save(self) -&gt; _Snapshot:
+        return _Snapshot(self.text, self.cursor)
+
+    def restore(self, snap: _Snapshot) -&gt; None:
+        self.text = snap.text
+        self.cursor = snap.cursor
+
+class History:                        # the caretaker: stores, never inspects
+    def __init__(self, limit: int = 50):
+        self._stack: deque[_Snapshot] = deque(maxlen=limit)
+
+    def push(self, snap: _Snapshot) -&gt; None:
+        self._stack.append(snap)
+
+    def pop(self) -&gt; _Snapshot:
+        return self._stack.pop()
+
+ed, history = Editor(), History()
+ed.text, ed.cursor = &quot;hello world&quot;, 11
+history.push(ed.save())
+ed.text = &quot;HELLO WORLD (regex replaced everything)&quot;
+ed.restore(history.pop())
+assert ed.text == &quot;hello world&quot;</code></pre>
+<p>The encapsulation point is the pattern's soul: the caretaker can hold
+snapshots without gaining access to the editor's internals, so the editor
+remains free to change its representation. Python enforces privacy only by
+convention, so signal it &mdash; a leading underscore, a frozen dataclass,
+and no getters.</p><h2>The Pythonic twist</h2>
+<p>Snapshotting machinery is built in: <code>copy.deepcopy(self)</code> is
+the sledgehammer memento for gnarly state, and the standard library ships a
+perfect specimen &mdash; <code>random.getstate()</code> /
+<code>random.setstate()</code> is a literal originator API. The engineering
+decision is <strong>Memento vs Command-undo</strong>: snapshots cost memory
+(mitigate with <code>deque(maxlen=...)</code>, or snapshot deltas) but handle
+any operation uniformly; inverse commands cost design effort per operation
+but stay tiny. Real editors mix them &mdash; commands for keystrokes,
+snapshots around the scary operations.</p><pre><code>import random
+
+state = random.getstate()             # memento from the stdlib
+a = random.random()
+random.setstate(state)
+assert random.random() == a           # time rewound</code></pre><div class="box"><span class="label">In the wild</span>
+<p>Database transactions and savepoints (<code>ROLLBACK</code> restores a
+memento), game save files, editor undo in every serious editor, VM and
+container snapshots, and <code>random.getstate()</code>/<code>setstate</code>
+in the standard library. Git commits are mementos with a caretaker so good it
+became the product.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>Big state &times; frequent snapshots = memory cliff &mdash; measure, cap
+the history, or store diffs. Deep-copying objects holding live resources
+(sockets, locks, file handles) copies the wrapper, not the resource; exclude
+them explicitly. And if every operation is cheaply invertible, Command-undo
+is leaner &mdash; don't photograph what you can simply reverse.</p></div><div class="box exercise"><span class="label">Exercise 20</span>
+<p>Build a <code>DrawingCanvas</code> whose state is a list of shape dicts.
+Implement <code>save()</code>/<code>restore()</code> with proper snapshot
+independence &mdash; then write the test that catches the classic bug: take a
+snapshot, mutate a shape <em>in place</em> on the live canvas, restore, and
+assert the old value came back. Make the test fail with a shallow snapshot,
+then fix it. Cap history at 10 with <code>deque</code> and verify snapshot 1
+evaporates after 11 saves.</p><details><summary>Hint</summary><p>The failing version stores <code>list(self.shapes)</code>
+&mdash; new list, same dicts, so in-place mutation leaks into the
+&ldquo;snapshot.&rdquo; The fix is <code>copy.deepcopy</code>, or storing
+immutable tuples of frozen dataclasses. You met this exact trap in Prototype
+&mdash; same physics, different pattern.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="mediator.html"><span class="dir">&larr; previous</span>Mediator</a><a rel="next" href="iterator.html" style="text-align:right"><span class="dir">next &rarr;</span>Iterator</a></div>
+</main>
+<script src="app.js"></script>
+
+</body>
+</html>

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Builder &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--creational)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Creational &middot; <b>Builder</b></div>
+  <div class="pn"><a rel="prev" href="singleton.html">&larr; Singleton</a><a rel="next" href="adapter.html">Adapter &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 05 / 23 &middot; Creational &middot; Start here</span>
+  <h1>Builder</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h5v-5h5v-5h5V5"/><path d="M17.2 7.2 19 5l1.8 2.2"/></svg></div>
+  <p class="intent">Construct a complex object step by step, validate at the end, and keep the call site readable — the cure for the telescoping constructor.</p>
+</header>
+<h2>The problem</h2>
+<p>Your HTTP client wrapper started with two parameters. Eighteen months
+later:</p><pre><code>req = HttpRequest(&quot;https://api.example.com/v2/orders&quot;, &quot;POST&quot;, None,
+                  {&quot;page&quot;: 1}, 30, 3, True, None, &quot;gzip&quot;, False)
+# quick: which True is which? what does the second None do?</code></pre>
+<p>This is the <em>telescoping constructor</em>: every optional feature grew
+the signature, call sites became positional soup, and there's nowhere to put
+cross-field rules like &ldquo;retries require an idempotent method&rdquo;.
+Invalid half-configured objects are one typo away.</p><h2>The pattern</h2>
+<p>Builder splits construction from the product: you accumulate configuration
+through small, named, chainable steps, and a final <code>build()</code>
+validates the whole and returns an immutable result. Nothing half-built ever
+escapes.</p><pre><code>from dataclasses import dataclass, field
+
+@dataclass(frozen=True)
+class HttpRequest:
+    url: str
+    method: str = &quot;GET&quot;
+    headers: dict = field(default_factory=dict)
+    timeout: float = 10.0
+    retries: int = 0
+
+class RequestBuilder:
+    def __init__(self, url: str):
+        self._url = url
+        self._method = &quot;GET&quot;
+        self._headers: dict = {}
+        self._timeout = 10.0
+        self._retries = 0
+
+    def post(self) -&gt; &quot;RequestBuilder&quot;:
+        self._method = &quot;POST&quot;
+        return self                       # &lt;- returning self enables chaining
+
+    def header(self, key: str, value: str) -&gt; &quot;RequestBuilder&quot;:
+        self._headers[key] = value
+        return self
+
+    def timeout(self, seconds: float) -&gt; &quot;RequestBuilder&quot;:
+        self._timeout = seconds
+        return self
+
+    def retries(self, n: int) -&gt; &quot;RequestBuilder&quot;:
+        self._retries = n
+        return self
+
+    def build(self) -&gt; HttpRequest:
+        if self._retries and self._method not in (&quot;GET&quot;, &quot;PUT&quot;, &quot;DELETE&quot;):
+            raise ValueError(&quot;retries require an idempotent method&quot;)
+        return HttpRequest(self._url, self._method, dict(self._headers),
+                           self._timeout, self._retries)
+
+req = (RequestBuilder(&quot;https://api.example.com/v2/orders&quot;)
+       .header(&quot;Accept&quot;, &quot;application/json&quot;)
+       .timeout(5)
+       .build())</code></pre><div class="demo"><span class="label">Try it — live demo</span>
+<div>
+  <button id="bl-post">.post()</button>
+  <button id="bl-header">.header("Accept", "json")</button>
+  <button id="bl-timeout">.timeout(5)</button>
+  <button id="bl-retries">.retries(3)</button>
+</div>
+<div class="out" id="bl-out"></div>
+<p class="note">Toggle steps to compose the chain. Note how retries + POST fails at build() &mdash; the builder is where cross-field rules live.</p></div><h2>The Pythonic twist</h2>
+<p>Keyword arguments with defaults already solve the <em>readability</em> half
+of this problem &mdash; <code>HttpRequest(url, timeout=5, retries=3)</code>
+needs no builder. So in Python, Builder earns its keep only when construction
+is genuinely <em>stepwise</em> (config gathered across time or code paths),
+needs <em>whole-object validation</em>, or produces <em>immutable</em>
+results. For &ldquo;copy with one change&rdquo; on frozen dataclasses,
+<code>dataclasses.replace</code> is the built-in answer:</p><pre><code>from dataclasses import replace
+
+fast = replace(req, timeout=1.0)   # new frozen object, one field changed</code></pre>
+<p>The GoF version also includes a <em>Director</em> &mdash; an object that
+owns canned recipes of builder steps. In Python that's usually just a plain
+function: <code>def signed_json_post(url): return
+RequestBuilder(url).post().header(...)...</code>. Don't add a class where a
+function will do.</p><div class="box"><span class="label">In the wild</span>
+<p>SQLAlchemy's <code>select(User).where(...).order_by(...).limit(10)</code> is a
+builder producing an immutable query. pandas method chains
+(<code>df.query(...).groupby(...).agg(...)</code>), Django QuerySets
+(<code>qs.filter(...).exclude(...)</code> &mdash; each step returns a new lazy
+queryset), and <code>argparse.ArgumentParser</code> setup are all stepwise
+construction with a final &ldquo;materialize&rdquo; step.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>Fewer than four or five parameters, no cross-field rules, mutable product is
+fine? Use keyword arguments &mdash; a builder there is ceremony. Also skip it
+when a dict + <code>**kwargs</code> unpack expresses the config naturally
+(e.g. loading from TOML straight into a dataclass).</p></div><div class="box exercise"><span class="label">Exercise 05</span>
+<p>Design a <code>PizzaBuilder</code> producing a frozen
+<code>Pizza(size, crust, toppings, vegan)</code>. Rules enforced in
+<code>build()</code>: a vegan pizza rejects <code>"pepperoni"</code> and
+<code>"mozzarella"</code>; a <code>"gluten-free"</code> crust only comes in
+size <code>"small"</code> or <code>"medium"</code>. Then write the same API as
+a plain <code>make_pizza(**kwargs)</code> function with the same validation,
+and write two sentences on which you'd ship and why. There's no single right
+answer &mdash; the argument is the exercise.</p><details><summary>Hint</summary><p>Keep toppings in a list internally but store them as a
+<code>tuple</code> on the frozen dataclass (lists aren't hashable and stay
+mutable). Validation belongs in exactly one place &mdash; if both versions
+share a <code>_validate(size, crust, toppings, vegan)</code> function, you've
+found the real design.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="singleton.html"><span class="dir">&larr; previous</span>Singleton</a><a rel="next" href="adapter.html" style="text-align:right"><span class="dir">next &rarr;</span>Adapter</a></div>
+</main>
+<script src="app.js"></script>
+<script>
+(function () {
+  var steps = {post: false, header: false, timeout: false, retries: false};
+  var chain = {post: ".post()", header: ".header(\"Accept\", \"json\")", timeout: ".timeout(5)", retries: ".retries(3)"};
+  function render() {
+    var code = "req = (RequestBuilder(\"https://api.example.com\")";
+    ["post", "header", "timeout", "retries"].forEach(function (k) {
+      if (steps[k]) code += "\n       " + chain[k];
+    });
+    code += "\n       .build())\n\n";
+    if (steps.retries && steps.post) {
+      code += "ValueError: retries require an idempotent method";
+    } else {
+      code += "HttpRequest(method=" + (steps.post ? "\"POST\"" : "\"GET\"") +
+              ", headers=" + (steps.header ? "{\"Accept\": \"json\"}" : "{}") +
+              ",\n            timeout=" + (steps.timeout ? "5" : "10.0") +
+              ", retries=" + (steps.retries ? "3" : "0") + ")   # frozen";
+    }
+    document.getElementById("bl-out").textContent = code;
+    Object.keys(steps).forEach(function (k) {
+      document.getElementById("bl-" + k).classList.toggle("on", steps[k]);
+    });
+  }
+  Object.keys(steps).forEach(function (k) {
+    document.getElementById("bl-" + k).addEventListener("click", function () {
+      steps[k] = !steps[k]; render();
+    });
+  });
+  render();
+})();</script>
+</body>
+</html>

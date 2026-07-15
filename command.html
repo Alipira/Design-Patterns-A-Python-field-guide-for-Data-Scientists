@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Command &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--behavioral)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Behavioral &middot; <b>Command</b></div>
+  <div class="pn"><a rel="prev" href="facade.html">&larr; Facade</a><a rel="next" href="template-method.html">Template Method &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 09 / 23 &middot; Behavioral</span>
+  <h1>Command</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="13" height="13" rx="2"/><path d="M9 8.3v4.4l3.8-2.2z" fill="currentColor" stroke="none"/><path d="M18.5 20H9.5"/><path d="M11.6 18 9.4 20l2.2 2"/></svg></div>
+  <p class="intent">Turn an action into an object, so it can be queued, logged, replayed — and undone.</p>
+</header>
+<h2>The problem</h2>
+<p>Your editor needs undo. But &ldquo;insert text&rdquo; currently happens as
+a direct method call from six places &mdash; a menu item, a hotkey, a paste
+handler, a macro player&hellip; There is no <em>thing</em> that represents
+&ldquo;what just happened,&rdquo; so there's nothing to put on an undo stack,
+nothing to log, and nothing a macro could replay.</p><h2>The pattern</h2>
+<p>Reify the action: each operation becomes an object that knows how to
+<code>execute()</code> itself and how to <code>undo()</code> itself,
+capturing everything it needs. Invokers (buttons, hotkeys) just hold
+commands; a history stack makes undo almost free:</p><pre><code>from typing import Protocol
+
+class Command(Protocol):
+    def execute(self) -&gt; None: ...
+    def undo(self) -&gt; None: ...
+
+class Document:
+    def __init__(self):
+        self.text = &quot;&quot;
+
+class InsertText:
+    def __init__(self, doc: Document, pos: int, s: str):
+        self.doc, self.pos, self.s = doc, pos, s
+
+    def execute(self) -&gt; None:
+        self.doc.text = self.doc.text[:self.pos] + self.s + self.doc.text[self.pos:]
+
+    def undo(self) -&gt; None:
+        self.doc.text = self.doc.text[:self.pos] + self.doc.text[self.pos + len(self.s):]
+
+class DeleteRange:
+    def __init__(self, doc: Document, start: int, end: int):
+        self.doc, self.start, self.end = doc, start, end
+        self._removed = &quot;&quot;                       # captured for undo
+
+    def execute(self) -&gt; None:
+        self._removed = self.doc.text[self.start:self.end]
+        self.doc.text = self.doc.text[:self.start] + self.doc.text[self.end:]
+
+    def undo(self) -&gt; None:
+        self.doc.text = self.doc.text[:self.start] + self._removed + self.doc.text[self.start:]
+
+class Editor:
+    def __init__(self, doc: Document):
+        self.doc = doc
+        self._history: list[Command] = []
+
+    def do(self, cmd: Command) -&gt; None:
+        cmd.execute()
+        self._history.append(cmd)
+
+    def undo(self) -&gt; None:
+        if self._history:
+            self._history.pop().undo()
+
+doc = Document()
+ed = Editor(doc)
+ed.do(InsertText(doc, 0, &quot;hello world&quot;))
+ed.do(DeleteRange(doc, 5, 11))
+ed.undo()                     # &#x27; world&#x27; comes back</code></pre>
+<p>Look at <code>DeleteRange</code> closely: <code>execute()</code> stashes
+what it destroyed so <code>undo()</code> can restore it. That's the heart of
+the pattern &mdash; a command captures not just <em>what to do</em> but
+<em>enough state to reverse it</em>.</p><h2>The Pythonic twist</h2>
+<p>If you only need &ldquo;an action as a value&rdquo; &mdash; queue it, defer
+it, pass it around &mdash; a closure or <code>functools.partial</code>
+<em>is</em> a command, and Python code uses them constantly without the name.
+The class form earns its keep exactly when you need the second method:
+<code>undo()</code>, or serialization for a task queue, or introspection for
+logging. A pleasant middle ground is a frozen dataclass command &mdash; free
+<code>__repr__</code> for your audit log, free equality for tests.</p><pre><code>from functools import partial
+
+queue = []
+queue.append(partial(print, &quot;deferred hello&quot;))   # a command, informally
+for task in queue:
+    task()</code></pre><div class="box"><span class="label">In the wild</span>
+<p>Every task queue (Celery serializes command objects to workers), database
+migrations with <code>upgrade()</code>/<code>downgrade()</code>, GUI
+frameworks' QAction/menu items, transactional outboxes, macro recording, and
+<code>functools.partial</code> whenever code hands an action to an executor
+(<code>ThreadPoolExecutor.submit</code> takes commands all day).</p></div><div class="box"><span class="label">When not to use it</span>
+<p>No undo, no queue, no log, no macro? Then a command class is a function
+call wearing a costume &mdash; just call the function. Beware command-class
+explosions for trivial operations, and know the memory tradeoff: commands
+that capture large state for undo shade into Memento territory, where
+snapshotting may be simpler than reversing.</p></div><div class="box exercise"><span class="label">Exercise 09</span>
+<p>Build a <code>BankAccount</code> with <code>Deposit(amount)</code> and
+<code>Withdraw(amount)</code> commands, plus an invoker supporting
+<code>undo()</code> <em>and</em> <code>redo()</code> (two stacks; a fresh
+<code>do()</code> clears the redo stack &mdash; think about why). Then add
+<code>Transfer(src, dst, amount)</code> as a <em>composite command</em> that
+executes a Withdraw and a Deposit and undoes them in reverse order. Test:
+deposit 100, withdraw 30, undo, undo, redo &mdash; assert the balance at
+every step.</p><details><summary>Hint</summary><p>Redo is just <code>cmd = self._redo.pop(); cmd.execute();
+self._undo.append(cmd)</code>. The composite:
+<code>execute()</code> runs children in order, <code>undo()</code> runs
+<code>reversed(self.children)</code> &mdash; reverse order matters the moment
+commands interact.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="facade.html"><span class="dir">&larr; previous</span>Facade</a><a rel="next" href="template-method.html" style="text-align:right"><span class="dir">next &rarr;</span>Template Method</a></div>
+</main>
+<script src="app.js"></script>
+
+</body>
+</html>

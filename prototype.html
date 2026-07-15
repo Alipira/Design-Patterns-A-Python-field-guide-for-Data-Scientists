@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prototype &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--creational)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Creational &middot; <b>Prototype</b></div>
+  <div class="pn"><a rel="prev" href="abstract-factory.html">&larr; Abstract Factory</a><a rel="next" href="bridge.html">Bridge &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 16 / 23 &middot; Creational</span>
+  <h1>Prototype</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" stroke-dasharray="3 2"/><rect x="4" y="4" width="11" height="11" rx="2"/></svg></div>
+  <p class="intent">Create new objects by copying a pre-configured example instead of building from scratch.</p>
+</header>
+<h2>The problem</h2>
+<p>Spawning an enemy in your game means loading its stats from disk,
+resolving its sprite sheet, and computing derived fields &mdash; 40&nbsp;ms of
+work. A horde needs 200 goblins that differ only in position and a little
+random health jitter. Rebuilding each one from scratch is 8 seconds of
+loading screen for objects that are 99% identical.</p><h2>The pattern</h2>
+<p>Prototype says: build one fully-configured exemplar, then <em>clone</em> it
+and tweak the differences. Python ships the cloning machinery in the
+<code>copy</code> module, so the pattern is mostly a thin, intention-revealing
+wrapper:</p><pre><code>import copy
+from dataclasses import dataclass, field
+
+@dataclass
+class Enemy:
+    kind: str
+    health: int
+    speed: float
+    loot: list = field(default_factory=list)
+
+    def clone(self, **overrides) -&gt; &quot;Enemy&quot;:
+        new = copy.deepcopy(self)          # deep: loot list is NOT shared
+        for k, v in overrides.items():
+            setattr(new, k, v)
+        return new
+
+# expensive setup happens once:
+GOBLIN = Enemy(kind=&quot;goblin&quot;, health=30, speed=1.2, loot=[&quot;dagger&quot;])
+
+horde = [GOBLIN.clone(health=30 + i % 7) for i in range(200)]
+horde[0].loot.append(&quot;gold&quot;)
+assert GOBLIN.loot == [&quot;dagger&quot;]           # exemplar untouched</code></pre>
+<p>A <em>prototype registry</em> completes the pattern: named exemplars looked
+up at runtime, so level files can say <code>"goblin"</code> and get a tuned
+object without knowing any class:</p><pre><code>REGISTRY: dict[str, Enemy] = {
+    &quot;goblin&quot;: Enemy(&quot;goblin&quot;, 30, 1.2, [&quot;dagger&quot;]),
+    &quot;troll&quot;: Enemy(&quot;troll&quot;, 120, 0.6, [&quot;club&quot;, &quot;hide&quot;]),
+}
+
+def spawn(kind: str, **overrides) -&gt; Enemy:
+    return REGISTRY[kind].clone(**overrides)</code></pre><h2>The Pythonic twist</h2>
+<p>Know your three copy depths, because the classic Prototype bug is a
+<em>shared mutable field</em> after a shallow copy:</p><pre><code>import copy
+from dataclasses import replace
+
+a = Enemy(&quot;goblin&quot;, 30, 1.2, [&quot;dagger&quot;])
+
+s = copy.copy(a)          # shallow: s.loot IS a.loot  (danger)
+d = copy.deepcopy(a)      # deep:    fully independent
+r = replace(a, health=99) # dataclasses.replace: new object, shallow fields
+
+s.loot.append(&quot;cursed ring&quot;)
+assert a.loot == [&quot;dagger&quot;, &quot;cursed ring&quot;]   # the shallow-copy trap, live</code></pre>
+<p>For fine control, implement <code>__copy__</code> /
+<code>__deepcopy__</code> &mdash; e.g. to share an immutable sprite atlas
+between clones (cheap) while deep-copying the mutable inventory (safe).
+Sharing the heavy immutable parts is where Prototype quietly shades into
+Flyweight.</p><div class="box"><span class="label">In the wild</span>
+<p><code>copy.deepcopy</code> itself, <code>DataFrame.copy()</code> in pandas,
+<code>dict(other)</code> / <code>list(other)</code> as idiomatic shallow
+clones, <code>datetime.replace(hour=0)</code> and
+<code>dataclasses.replace</code> as copy-with-changes. Configuration systems
+that start from a default profile and override per environment are prototype
+thinking, as is JavaScript's entire object model.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>If construction is cheap, just call the constructor &mdash; clones make
+object provenance harder to trace. Be careful cloning objects holding live
+resources (sockets, file handles, locks): copying the wrapper doesn't copy the
+resource, and <code>deepcopy</code> on a big object graph can be slower than
+rebuilding. When only one or two fields vary, a factory function with defaults
+often reads better.</p></div><div class="box exercise"><span class="label">Exercise 16</span>
+<p>Implement the <code>Enemy.clone()</code> registry above, then make it fail:
+change <code>deepcopy</code> to <code>copy.copy</code> and write a test that
+catches the shared-loot bug. Restore <code>deepcopy</code>, then add a heavy
+immutable field <code>sprite_atlas: bytes</code> and implement
+<code>__deepcopy__</code> so clones <em>share</em> the atlas (assert with
+<code>is</code>) while loot stays independent (assert with
+<code>is not</code>).</p><details><summary>Hint</summary><p><code>__deepcopy__(self, memo)</code> builds the new object
+field by field: <code>copy.deepcopy(self.loot, memo)</code> for the list, but
+plain <code>self.sprite_atlas</code> for the shared blob. The pair of
+assertions <code>a.sprite_atlas is b.sprite_atlas</code> and
+<code>a.loot is not b.loot</code> is the whole spec.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="abstract-factory.html"><span class="dir">&larr; previous</span>Abstract Factory</a><a rel="next" href="bridge.html" style="text-align:right"><span class="dir">next &rarr;</span>Bridge</a></div>
+</main>
+<script src="app.js"></script>
+
+</body>
+</html>

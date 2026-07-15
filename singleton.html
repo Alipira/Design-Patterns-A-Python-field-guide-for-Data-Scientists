@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Singleton &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--creational)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Creational &middot; <b>Singleton</b></div>
+  <div class="pn"><a rel="prev" href="factory-method.html">&larr; Factory Method</a><a rel="next" href="builder.html">Builder &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 04 / 23 &middot; Creational &middot; Start here</span>
+  <h1>Singleton</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/></svg></div>
+  <p class="intent">Guarantee a class has one instance and give everyone the same one — the most famous pattern, and the most abused.</p>
+</header>
+<h2>The problem</h2>
+<p>Your app parses a 2&nbsp;MB YAML config file. Profiling shows it's parsed
+forty times per request, because every module that needs a setting calls
+<code>Settings()</code> and gets its own copy. Same story with connection
+pools: five modules, five pools, database complains about connection limits.
+You need <em>one shared instance</em>.</p><h2>The classic solution</h2>
+<p>The GoF answer intercepts construction so the second call returns the first
+object. In Python that hook is <code>__new__</code>:</p><pre><code>class Settings:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._load()
+        return cls._instance
+
+    def _load(self) -&gt; None:
+        print(&quot;expensive parse happens once&quot;)
+        self.values = {&quot;debug&quot;: False, &quot;db_url&quot;: &quot;postgres://...&quot;}
+
+a = Settings()
+b = Settings()
+assert a is b   # same object, parsed once</code></pre><div class="demo"><span class="label">Try it — live demo</span>
+<div>
+  <button id="sg-single">Settings()</button>
+  <button id="sg-normal">dict()</button>
+  <button id="sg-reset">reset demo</button>
+</div>
+<div class="out" id="sg-out">Click Settings() a few times, then dict() a few times.</div>
+<p class="note">The singleton hands back the same id() every call; a normal constructor mints a fresh object each time.</p></div><h2>The Pythonic truth</h2>
+<p>Here's the part the textbooks skip: <strong>Python already has singletons
+&mdash; they're called modules.</strong> A module is created once, cached in
+<code>sys.modules</code>, and every <code>import</code> hands out the same
+object. So the idiomatic singleton is embarrassingly small:</p><pre><code># settings.py  -- the module IS the singleton
+def _load() -&gt; dict:
+    print(&quot;expensive parse happens once&quot;)
+    return {&quot;debug&quot;: False, &quot;db_url&quot;: &quot;postgres://...&quot;}
+
+values = _load()
+
+# anywhere else:
+# from settings import values</code></pre>
+<p>When you need laziness (don't pay the cost until first use) or a reset
+button for tests, <code>functools.lru_cache</code> on a getter gives you both
+in three lines &mdash; this is my house style for the pattern:</p><pre><code>from functools import lru_cache
+
+@lru_cache(maxsize=1)
+def get_settings() -&gt; dict:
+    print(&quot;expensive parse happens once, on first call&quot;)
+    return {&quot;debug&quot;: False, &quot;db_url&quot;: &quot;postgres://...&quot;}
+
+# get_settings() is get_settings()  -&gt; True
+# get_settings.cache_clear()        -&gt; reset hook for tests</code></pre><h2>The senior warning</h2>
+<p>Singleton is really <em>global mutable state wearing a design-pattern
+badge</em>. Every consumer is invisibly coupled to it, tests bleed state into
+each other, and one day someone needs a second instance (staging + prod
+config, one pool per tenant) and the &ldquo;single&rdquo; guarantee becomes
+the bug. Reach for it only for genuinely process-wide, read-mostly resources
+&mdash; and even then, prefer <em>passing</em> the shared object in
+(dependency injection) so the sharing is a choice made at the top of your
+program, not a law baked into the class.</p><div class="box"><span class="label">In the wild</span>
+<p><code>None</code>, <code>True</code>, and <code>Ellipsis</code> are real
+singletons &mdash; that's why <code>is None</code> works.
+<code>logging.getLogger("x")</code> returns one logger per name.
+Django's <code>settings</code> object and SQLAlchemy engine instances are
+module-level singletons by convention, exactly as above.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>Almost everywhere you're tempted. If a function needs the config, pass it
+the config &mdash; explicit beats ambient. Avoid it for anything mutable that
+tests touch, anything per-tenant or per-request, and never use it just to
+avoid typing a parameter. The rule of thumb from many painful code reviews:
+a singleton is fine as a <em>cache</em>, dangerous as a <em>channel</em>.</p></div><div class="box exercise"><span class="label">Exercise 04</span>
+<p>You inherit the <code>__new__</code>-based <code>DatabasePool</code> below.
+First, write a pytest that demonstrates the problem: a test that mutates
+<code>pool.connections</code> pollutes the next test. Then refactor to the
+<code>lru_cache</code> getter style with a <code>cache_clear()</code> in a
+fixture, and show both tests now pass in any order.</p><pre><code>class DatabasePool:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance.connections = []
+        return cls._instance</code></pre><details><summary>Hint</summary><p>Target shape: <code>@lru_cache(maxsize=1) def get_pool() -&gt;
+Pool: return Pool()</code> plus a fixture with
+<code>get_pool.cache_clear()</code> in its teardown. The class itself becomes
+a perfectly ordinary class &mdash; the <em>sharing policy</em> moved out of it.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="factory-method.html"><span class="dir">&larr; previous</span>Factory Method</a><a rel="next" href="builder.html" style="text-align:right"><span class="dir">next &rarr;</span>Builder</a></div>
+</main>
+<script src="app.js"></script>
+<script>
+(function () {
+  var out = document.getElementById("sg-out");
+  var singletonId = null, seq = 0, log = [];
+  function show() { out.textContent = log.join("\n"); }
+  function hexid() { seq += 1; return "0x7f3a9c" + (4000 + seq * 16).toString(16); }
+  document.getElementById("sg-single").addEventListener("click", function () {
+    var fresh = singletonId === null;
+    if (fresh) singletonId = hexid();
+    log.push(">>> id(Settings())   # " + singletonId + (fresh ? "   <- created (parse ran)" : "   <- same object, no parse"));
+    show();
+  });
+  document.getElementById("sg-normal").addEventListener("click", function () {
+    log.push(">>> id(dict())       # " + hexid() + "   <- brand new object");
+    show();
+  });
+  document.getElementById("sg-reset").addEventListener("click", function () {
+    singletonId = null; seq = 0; log = [];
+    out.textContent = "Click Settings() a few times, then dict() a few times.";
+  });
+})();</script>
+</body>
+</html>

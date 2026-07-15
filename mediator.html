@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mediator &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--behavioral)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Behavioral &middot; <b>Mediator</b></div>
+  <div class="pn"><a rel="prev" href="flyweight.html">&larr; Flyweight</a><a rel="next" href="memento.html">Memento &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 19 / 23 &middot; Behavioral</span>
+  <h1>Mediator</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2.7"/><circle cx="12" cy="3.6" r="1.6" fill="currentColor" stroke="none"/><circle cx="20.4" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="20.4" r="1.6" fill="currentColor" stroke="none"/><circle cx="3.6" cy="12" r="1.6" fill="currentColor" stroke="none"/><path d="M12 5.5v3.6M18.5 12h-3.6M12 18.5v-3.6M5.5 12h3.6"/></svg></div>
+  <p class="intent">Replace a tangle of objects that all talk to each other with a hub that owns the conversation.</p>
+</header>
+<h2>The problem</h2>
+<p>A signup dialog: the &ldquo;company account&rdquo; checkbox reveals the
+VAT field, the VAT field's validity gates the submit button, submitting
+disables everything, errors re-enable some of it. Implemented naively, each
+widget holds references to the others &mdash; four widgets, and already a
+web where adding a fifth means teaching it about everyone (n&sup2; couplings,
+in the limit).</p><h2>The pattern</h2>
+<p>Components stop knowing each other. Each one reports events to a single
+mediator; the mediator owns all the interaction rules and directs the
+components. n&sup2; couplings become n:</p><pre><code>class Component:
+    def __init__(self, mediator: &quot;SignupDialog&quot;, name: str):
+        self.mediator = mediator
+        self.name = name
+
+    def changed(self, event: str) -&gt; None:
+        self.mediator.notify(self, event)     # the ONLY outgoing arrow
+
+class Checkbox(Component):
+    def __init__(self, mediator, name):
+        super().__init__(mediator, name)
+        self.checked = False
+
+class Field(Component):
+    def __init__(self, mediator, name):
+        super().__init__(mediator, name)
+        self.visible = False
+        self.value = &quot;&quot;
+
+class Button(Component):
+    def __init__(self, mediator, name):
+        super().__init__(mediator, name)
+        self.enabled = False
+
+class SignupDialog:                            # the mediator
+    def __init__(self):
+        self.company = Checkbox(self, &quot;company&quot;)
+        self.vat = Field(self, &quot;vat&quot;)
+        self.submit = Button(self, &quot;submit&quot;)
+
+    def notify(self, sender: Component, event: str) -&gt; None:
+        if sender is self.company and event == &quot;toggled&quot;:
+            self.vat.visible = self.company.checked
+            self.submit.enabled = not self.company.checked
+        elif sender is self.vat and event == &quot;edited&quot;:
+            self.submit.enabled = len(self.vat.value) == 11
+
+dialog = SignupDialog()
+dialog.company.checked = True
+dialog.company.changed(&quot;toggled&quot;)              # vat appears, submit gated</code></pre>
+<p>All the &ldquo;when X then Y&rdquo; policy now lives in one readable
+method. Widgets became reusable dumb components; the dialog became the one
+file you open when the interaction rules change.</p><h2>The Pythonic twist</h2>
+<p>Mediator and Observer are siblings, and real systems often fuse them: the
+mediator <em>is</em> an event hub components publish to. The difference is
+where the coordination logic lives &mdash; Observer scatters reactions across
+subscribers (each knows its own response); Mediator centralizes the rules in
+the hub (components stay policy-free). Pick by asking where you want to read
+the rules later. In Python the mediator is frequently just &ldquo;the parent
+object&rdquo;: a controller class holding its children and brokering their
+interactions, no framework required. The failure mode has a name &mdash;
+<em>god object</em> &mdash; and the guard rail is that a mediator holds
+<em>interaction</em> policy only; the moment it computes VAT validity itself
+rather than asking the field, it has started absorbing its components.</p><div class="box"><span class="label">In the wild</span>
+<p>Air traffic control is the canonical metaphor (planes never negotiate with
+each other). Chat room servers, GUI dialog controllers and MVC controllers,
+message brokers and service buses at architecture scale, and Redux-style
+single-store dispatch in frontend land.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>Two components with one interaction: let them talk &mdash; a mediator
+there is bureaucracy. Watch the mediator's size in review; when
+<code>notify</code> becomes a 300-line rule engine, split it by concern or
+push behavior back into components. And keep components genuinely ignorant of
+each other, or you quietly pay for both architectures at once.</p></div><div class="box exercise"><span class="label">Exercise 19</span>
+<p>Build a chat room mediator: <code>User.send(text)</code> calls
+<code>room.route(sender, text)</code>; the room broadcasts to everyone else.
+Users hold no references to other users. Then add features <em>touching only
+the room</em>: direct messages (<code>"@name hello"</code>), a mute list
+(muted users' messages route nowhere), and a transcript. Finish with the
+test that proves the architecture: creating a user requires only a room,
+never another user.</p><details><summary>Hint</summary><p><code>Room.route</code> parses the <code>@name</code> prefix
+itself &mdash; that's interaction policy, so it belongs in the mediator, not
+in <code>User.send</code>. If you felt tempted to put it in the user, that
+tension is the lesson.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="flyweight.html"><span class="dir">&larr; previous</span>Flyweight</a><a rel="next" href="memento.html" style="text-align:right"><span class="dir">next &rarr;</span>Memento</a></div>
+</main>
+<script src="app.js"></script>
+
+</body>
+</html>

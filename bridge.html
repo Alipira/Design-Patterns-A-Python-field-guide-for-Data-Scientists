@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bridge &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--structural)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Structural &middot; <b>Bridge</b></div>
+  <div class="pn"><a rel="prev" href="prototype.html">&larr; Prototype</a><a rel="next" href="flyweight.html">Flyweight &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 17 / 23 &middot; Structural</span>
+  <h1>Bridge</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 18V6"/><path d="M20 18V6"/><path d="M4 10h16"/><path d="M4 14.5h16" stroke-dasharray="3 2.2"/></svg></div>
+  <p class="intent">Split a class that varies along two independent dimensions into two hierarchies connected by composition — turning m×n subclasses into m+n.</p>
+</header>
+<h2>The problem</h2>
+<p>Your charting library renders shapes as either SVG or raster. With
+inheritance as the only tool, the class list reads:
+<code>SvgCircle</code>, <code>RasterCircle</code>, <code>SvgSquare</code>,
+<code>RasterSquare</code>&hellip; Adding a triangle means two new classes;
+adding a PDF renderer means one new class <em>per shape</em>. Two independent
+axes of change &mdash; shape and rendering &mdash; have been multiplied into
+one exploding hierarchy.</p><h2>The pattern</h2>
+<p>Bridge cuts the hierarchy in two: an <em>abstraction</em> side (what the
+thing is &mdash; shapes) that <em>holds</em> an <em>implementation</em> side
+(how it's drawn &mdash; renderers). Each axis now grows independently:</p><pre><code>from typing import Protocol
+
+class Renderer(Protocol):                       # implementation axis
+    def circle(self, radius: float) -&gt; str: ...
+    def square(self, side: float) -&gt; str: ...
+
+class SvgRenderer:
+    def circle(self, radius: float) -&gt; str:
+        return f&#x27;&lt;circle r=&quot;{radius}&quot;/&gt;&#x27;
+    def square(self, side: float) -&gt; str:
+        return f&#x27;&lt;rect width=&quot;{side}&quot; height=&quot;{side}&quot;/&gt;&#x27;
+
+class RasterRenderer:
+    def circle(self, radius: float) -&gt; str:
+        return f&quot;[pixels: circle r={radius}]&quot;
+    def square(self, side: float) -&gt; str:
+        return f&quot;[pixels: square s={side}]&quot;
+
+class Shape:                                    # abstraction axis
+    def __init__(self, renderer: Renderer):    # &lt;- the bridge
+        self.renderer = renderer
+
+class Circle(Shape):
+    def __init__(self, renderer: Renderer, radius: float):
+        super().__init__(renderer)
+        self.radius = radius
+    def draw(self) -&gt; str:
+        return self.renderer.circle(self.radius)
+
+class Square(Shape):
+    def __init__(self, renderer: Renderer, side: float):
+        super().__init__(renderer)
+        self.side = side
+    def draw(self) -&gt; str:
+        return self.renderer.square(self.side)
+
+Circle(SvgRenderer(), 5).draw()      # &#x27;&lt;circle r=&quot;5&quot;/&gt;&#x27;
+Circle(RasterRenderer(), 5).draw()   # &#x27;[pixels: circle r=5]&#x27;</code></pre>
+<p>Count the arithmetic: 2 shapes &times; 2 renderers was heading toward 4, 6,
+8 classes; the bridge holds it at 2&nbsp;+&nbsp;2, and a PDF renderer is
+exactly one new class.</p><h2>The Pythonic twist</h2>
+<p>You've seen this move before &mdash; it's <em>composition over
+inheritance</em>, and structurally it's identical to Strategy. The difference
+is intent and timing: Strategy swaps an <em>algorithm</em>, often at runtime;
+Bridge is an <em>architectural</em> split you make when a class has two
+reasons to change, usually fixed at construction. In Python there's no
+ceremony beyond what's above &mdash; the pattern is just &ldquo;pass the
+other hierarchy in&rdquo;. Recognize it by the constructor:
+<code>Circle(renderer, ...)</code> is a bridge in the wild.</p><div class="box"><span class="label">In the wild</span>
+<p>SQLAlchemy is a giant bridge: the query abstraction on one side, dialect
+implementations (PostgreSQL, SQLite, MySQL) on the other, connected through
+the engine. GUI toolkits bridge widget abstractions to platform backends.
+Python's <code>logging</code> splits what to log (loggers) from where it goes
+(handlers) &mdash; same cut. Device drivers behind an OS API are the original
+motivating case.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>One axis of variation is just ordinary polymorphism &mdash; don't pre-split
+a hierarchy for a second dimension that may never come (that's speculative
+generality). If both sides would always be paired one-to-one anyway
+(<code>SvgCircle</code> logic that only makes sense with SVG), the bridge
+buys nothing but indirection.</p></div><div class="box exercise"><span class="label">Exercise 17</span>
+<p>A notification system has message kinds (<code>Alert</code>,
+<code>Digest</code>) and delivery channels (<code>Email</code>,
+<code>Slack</code>). Implement it as a bridge: channels expose
+<code>deliver(subject, body)</code>; message kinds format themselves
+differently (an alert is loud and short, a digest aggregates a list) and
+deliver through whatever channel they're given. Then add an <code>Sms</code>
+channel and confirm you wrote exactly one new class. For contrast, list the
+class names the naive inheritance version would need.</p><details><summary>Hint</summary><p>Shape: <code>class Message: def __init__(self, channel:
+Channel)</code>; <code>Alert.send()</code> builds its subject/body then calls
+<code>self.channel.deliver(...)</code>. The naive version needs
+<code>AlertEmail, AlertSlack, AlertSms, DigestEmail, DigestSlack,
+DigestSms</code> &mdash; six and counting.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="prototype.html"><span class="dir">&larr; previous</span>Prototype</a><a rel="next" href="flyweight.html" style="text-align:right"><span class="dir">next &rarr;</span>Flyweight</a></div>
+</main>
+<script src="app.js"></script>
+
+</body>
+</html>

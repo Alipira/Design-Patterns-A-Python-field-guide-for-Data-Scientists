@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proxy &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--structural)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Structural &middot; <b>Proxy</b></div>
+  <div class="pn"><a rel="prev" href="state.html">&larr; State</a><a rel="next" href="chain-of-responsibility.html">Chain of Responsibility &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 13 / 23 &middot; Structural</span>
+  <h1>Proxy</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="11" y="7" width="9.5" height="10" rx="2" stroke-dasharray="3 2"/><rect x="3.5" y="7" width="9.5" height="10" rx="2"/></svg></div>
+  <p class="intent">Stand in front of an object with the same interface and control access to it — lazily, protectively, remotely, or with a cache.</p>
+</header>
+<h2>The problem</h2>
+<p>Your gallery model loads the full 50&nbsp;MB image in
+<code>__init__</code>. Listing a folder instantiates every image to show
+three thumbnails and a filename &mdash; ten seconds of I/O for data nobody
+looked at. You need the object to <em>exist</em> cheaply and pay its real
+cost only if someone actually uses it.</p><h2>The pattern</h2>
+<p>A proxy implements the subject's interface and holds (or knows how to get)
+the real subject, deciding <em>when and whether</em> calls reach it. The lazy
+(&ldquo;virtual&rdquo;) variant solves the gallery:</p><pre><code>from typing import Protocol
+
+class Image(Protocol):
+    def display(self) -&gt; str: ...
+
+class RealImage:
+    def __init__(self, path: str):
+        print(f&quot;loading 50 MB from {path}...&quot;)     # the expensive part
+        self.path = path
+
+    def display(self) -&gt; str:
+        return f&quot;[pixels of {self.path}]&quot;
+
+class LazyImage:
+    def __init__(self, path: str):
+        self.path = path                            # cheap: no I/O
+        self._real: RealImage | None = None
+
+    def display(self) -&gt; str:
+        if self._real is None:                      # load on first use
+            self._real = RealImage(self.path)
+        return self._real.display()
+
+gallery = [LazyImage(f&quot;photo_{i}.raw&quot;) for i in range(1000)]  # instant
+gallery[0].display()   # only now does photo_0 load</code></pre>
+<p>Same skeleton, different gatekeeping policies &mdash; the four classic
+variants: <strong>virtual</strong> (lazy, above), <strong>protection</strong>
+(check permissions before delegating), <strong>remote</strong> (the local
+object is a stub forwarding over the network &mdash; every RPC client),
+and <strong>caching/logging</strong> (memoize or record calls on the way
+through).</p><h2>The Pythonic twist</h2>
+<p>Python's <code>__getattr__</code> fires only for attributes the object
+<em>doesn't</em> have &mdash; which makes a transparent forwarding proxy
+almost free, no interface re-typing required:</p><pre><code>class LoggingProxy:
+    def __init__(self, target):
+        self._target = target
+
+    def __getattr__(self, name):
+        attr = getattr(self._target, name)
+        if callable(attr):
+            def logged(*args, **kwargs):
+                print(f&quot;call: {name}{args}&quot;)
+                return attr(*args, **kwargs)
+            return logged
+        return attr</code></pre>
+<p>And for the single most common lazy-attribute case,
+<code>functools.cached_property</code> is a one-decorator virtual proxy for
+one attribute. Proxy vs Decorator, since they're structurally twins: a
+decorator <em>adds behavior</em> and always delegates; a proxy <em>controls
+access</em> and may refuse, delay, or answer from cache without ever touching
+the subject. Same shape, different contract.</p><div class="box"><span class="label">In the wild</span>
+<p>Django's <code>request.user</code> is a <code>SimpleLazyObject</code>
+&mdash; the DB query happens only if you touch it. ORM lazy relationships
+(<code>order.customer</code> triggering a query) are virtual proxies; gRPC
+and other RPC stubs are remote proxies; <code>weakref.proxy</code> is one by
+name; <code>functools.cached_property</code> and <code>mock.Mock</code>
+(recording every call) round out the family.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>Transparent laziness moves cost to a surprising moment &mdash; the classic
+production bug is a &ldquo;cheap&rdquo; template render firing forty lazy DB
+loads (the ORM N+1 problem is proxy laziness biting back). Magic
+<code>__getattr__</code> proxies also confuse type checkers, IDEs, and
+<code>isinstance</code>. If the object is cheap, or callers always use it
+immediately, the proxy is pure indirection &mdash; skip it.</p></div><div class="box exercise"><span class="label">Exercise 13</span>
+<p>Given a <code>WeatherService</code> whose <code>forecast(city)</code>
+sleeps 2 seconds (stub the slowness), build two stackable proxies sharing its
+protocol: <code>CachingProxy(service, ttl_seconds)</code> that memoizes per
+city with expiry, and <code>ProtectionProxy(service, user)</code> that raises
+<code>PermissionError</code> unless <code>user.role == "admin"</code>.
+Compose them both ways &mdash; <code>Protection(Caching(real))</code> vs
+<code>Caching(Protection(real))</code> &mdash; and write down the security
+difference. One of these orders has a hole.</p><details><summary>Hint</summary><p>Cache entries as <code>{city: (timestamp, result)}</code>
+checked against <code>time.monotonic()</code>. The hole:
+<code>Caching(Protection(...))</code> means an admin's earlier call can be
+served from cache to a non-admin if the cache sits <em>outside</em> the
+guard&hellip; wait, check which wrapper sees the request first. Trace one
+request through each stack by hand &mdash; that trace is the answer.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="state.html"><span class="dir">&larr; previous</span>State</a><a rel="next" href="chain-of-responsibility.html" style="text-align:right"><span class="dir">next &rarr;</span>Chain of Responsibility</a></div>
+</main>
+<script src="app.js"></script>
+
+</body>
+</html>

@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Iterator &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--behavioral)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Behavioral &middot; <b>Iterator</b></div>
+  <div class="pn"><a rel="prev" href="memento.html">&larr; Memento</a><a rel="next" href="visitor.html">Visitor &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 21 / 23 &middot; Behavioral</span>
+  <h1>Iterator</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4.5" cy="16" r="1.7" fill="currentColor" stroke="none"/><circle cx="10" cy="16" r="1.7"/><circle cx="15.5" cy="16" r="1.7"/><circle cx="21" cy="16" r="1.7"/><path d="M4.5 12.5C8 6 16 6 19.6 10.6"/><path d="M19.9 7.6l-.1 3.1-3-.6"/></svg></div>
+  <p class="intent">Walk a collection without exposing how it's built — so deeply woven into Python that you stopped seeing it.</p>
+</header>
+<h2>The problem</h2>
+<p>Your <code>LinkedList</code> works, but callers traverse it by grabbing
+<code>head</code> and following <code>.next_node</code> by hand &mdash; every
+caller re-implements the walk, and none of them can survive you switching to
+a doubly-linked or chunked representation. The structure's internals have
+become its public API.</p><h2>The pattern</h2>
+<p>The collection hands out a separate <em>iterator</em> object that knows
+the current position and how to advance; clients use only that. Python bakes
+the contract into the language: <code>__iter__</code> returns an iterator,
+<code>__next__</code> advances it, <code>StopIteration</code> ends it &mdash;
+and <code>for</code> speaks that protocol natively:</p><pre><code>class _Node:
+    def __init__(self, value, next_node=None):
+        self.value, self.next_node = value, next_node
+
+class LinkedList:
+    def __init__(self, *values):
+        self.head = None
+        for v in reversed(values):
+            self.head = _Node(v, self.head)
+
+    def __iter__(self):
+        node = self.head
+        while node:
+            yield node.value           # a generator IS an iterator
+            node = node.next_node
+
+lst = LinkedList(1, 2, 3)
+for v in lst:                          # no .head, no .next_node in sight
+    print(v)
+total = sum(lst)                       # every builtin now works</code></pre>
+<p>That <code>yield</code> is the entire GoF pattern: the generator object
+Python creates for you <em>is</em> the iterator class you'd otherwise write
+by hand, with the position bookkeeping stored in the paused frame. Writing
+<code>__next__</code> manually is museum-grade Python &mdash; know how it
+works, almost never write it.</p><h2>The Pythonic twist</h2>
+<p>The distinction worth actually internalizing is <em>iterable</em> (can
+produce iterators; a list) versus <em>iterator</em> (one exhausted-once walk;
+a generator). Collections should return a <em>fresh</em> iterator from every
+<code>__iter__</code> call &mdash; that's what lets two loops walk the same
+structure simultaneously, and it's the bug when someone's custom class
+mysteriously &ldquo;goes empty&rdquo; on the second loop. Beyond that,
+<code>itertools</code> is the pattern's standard library:
+<code>islice</code>, <code>chain</code>, <code>takewhile</code> compose walks
+without materializing lists, which is the whole performance story of lazy
+iteration.</p><pre><code>class Countdown:
+    def __init__(self, n: int):
+        self.n = n
+
+    def __iter__(self):                # fresh iterator per call
+        n = self.n
+        while n &gt; 0:
+            yield n
+            n -= 1
+
+c = Countdown(3)
+list(zip(c, c))                        # [(3, 3), (2, 2), (1, 1)] -- independent walks</code></pre><div class="box"><span class="label">In the wild</span>
+<p>Everywhere: <code>for</code>, comprehensions, <code>zip</code>,
+<code>enumerate</code>, file objects yielding lines, <code>dict</code> views,
+<code>csv.reader</code>, <code>Path.iterdir()</code>, database cursors,
+<code>range</code>. Every generator you've written was you using the GoF
+Iterator pattern with language-level sugar.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>Nothing to avoid about the pattern itself in Python &mdash; the traps are
+usage-level: returning <code>self</code> from a collection's
+<code>__iter__</code> (one shared walk, the goes-empty bug), calling
+<code>list()</code> on an infinite iterator, and iterating a structure while
+mutating it. If callers need random access or length, an iterator is the
+wrong gift &mdash; hand them a sequence.</p></div><div class="box exercise"><span class="label">Exercise 21</span>
+<p>Build a binary search tree with <code>insert</code>, then give it
+<code>__iter__</code> yielding values in sorted order via recursive
+<code>yield from</code>. Add a second traversal, <code>breadth_first()</code>,
+as a generator using <code>collections.deque</code>. Final proof of
+independence: <code>list(zip(tree, tree.breadth_first()))</code> must
+interleave both walks over the same tree without interference.</p><details><summary>Hint</summary><p>In-order:
+<code>if node.left: yield from self._walk(node.left)</code>, yield the node,
+recurse right. Breadth-first: seed a deque with the root,
+<code>popleft</code>, yield, append children. Both being generators is what
+makes the zip interleaving work for free.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="memento.html"><span class="dir">&larr; previous</span>Memento</a><a rel="next" href="visitor.html" style="text-align:right"><span class="dir">next &rarr;</span>Visitor</a></div>
+</main>
+<script src="app.js"></script>
+
+</body>
+</html>

@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flyweight &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--structural)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Structural &middot; <b>Flyweight</b></div>
+  <div class="pn"><a rel="prev" href="bridge.html">&larr; Bridge</a><a rel="next" href="mediator.html">Mediator &rarr;</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 18 / 23 &middot; Structural</span>
+  <h1>Flyweight</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="12" r="3" fill="currentColor" stroke="none"/><circle cx="17" cy="5.5" r="2.1"/><circle cx="19" cy="12" r="2.1"/><circle cx="17" cy="18.5" r="2.1"/><path d="M9.6 10.7 15 6.7M10 12h6.8M9.6 13.3 15 17.3"/></svg></div>
+  <p class="intent">Share the heavy, identical part of many objects instead of duplicating it — a memory optimization with a factory-managed cache.</p>
+</header>
+<h2>The problem</h2>
+<p>Your document editor represents each character as an object carrying its
+font name, size, weight, and color. A 500-page manuscript is a million
+characters &mdash; and a million copies of the string
+<code>"Source Serif Pro"</code>. Memory profiling shows 90% of the heap is
+identical styling data repeated per character.</p><h2>The pattern</h2>
+<p>Flyweight splits object state in two. <em>Intrinsic</em> state (the shared,
+immutable part: the style) lives in a small number of cached objects.
+<em>Extrinsic</em> state (what actually varies: the character, its position)
+stays outside and is passed in or stored per instance. A factory hands out the
+shared objects, creating each distinct one exactly once:</p><pre><code>from dataclasses import dataclass
+
+@dataclass(frozen=True)                     # immutable -- non-negotiable
+class GlyphStyle:
+    font: str
+    size: int
+    bold: bool
+
+class StyleFactory:
+    def __init__(self):
+        self._cache: dict[tuple, GlyphStyle] = {}
+
+    def get(self, font: str, size: int, bold: bool = False) -&gt; GlyphStyle:
+        key = (font, size, bold)
+        if key not in self._cache:
+            self._cache[key] = GlyphStyle(font, size, bold)
+        return self._cache[key]
+
+styles = StyleFactory()
+
+@dataclass
+class Char:                                  # extrinsic state stays here
+    ch: str
+    style: GlyphStyle                        # reference, not copy
+
+doc = [Char(c, styles.get(&quot;Source Serif Pro&quot;, 11)) for c in &quot;a million chars&quot;]
+assert doc[0].style is doc[1].style          # one style object, shared</code></pre><h2>The Pythonic twist</h2>
+<p>The factory-with-a-cache is such a common shape that
+<code>functools.lru_cache</code> <em>is</em> a flyweight factory when the
+product is immutable:</p><pre><code>from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def get_style(font: str, size: int, bold: bool = False) -&gt; GlyphStyle:
+    return GlyphStyle(font, size, bold)
+
+assert get_style(&quot;Menlo&quot;, 12) is get_style(&quot;Menlo&quot;, 12)</code></pre>
+<p>Python itself flyweights aggressively: CPython caches small integers
+(&minus;5 through 256), interns many strings (and lets you force it with
+<code>sys.intern</code> for fast comparisons in hot dict lookups), and
+<code>re.compile</code> keeps an internal cache of compiled patterns. The
+companion tool in the same fight is <code>__slots__</code>, which shrinks the
+per-instance overhead of whatever extrinsic state remains.</p>
+<p>The one law of flyweights: <strong>shared state must be immutable.</strong>
+Mutate a shared style and every &ldquo;a&rdquo; in the manuscript goes bold
+at once &mdash; the hardest kind of bug to trace back. That's what
+<code>frozen=True</code> is buying above.</p><div class="box"><span class="label">In the wild</span>
+<p>String interning and the small-int cache in CPython, <code>re</code>'s
+pattern cache, glyph and texture atlases in game engines and font renderers,
+Java's <code>Integer.valueOf</code> cache &mdash; and every ORM identity map
+(one object per row per session) is at least a first cousin.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>This is an optimization: apply it after <code>tracemalloc</code> says so,
+not before. It buys memory with indirection and a cache to manage (unbounded
+caches on user-controlled keys are a slow leak &mdash; note
+<code>maxsize=None</code> above is a choice, not a default to copy blindly).
+If instances rarely repeat, the cache is pure overhead; if the shared part
+must change per object, it was never intrinsic state to begin with.</p></div><div class="box exercise"><span class="label">Exercise 18</span>
+<p>A particle system spawns 100,000 particles, each with a type (sprite name,
+base color, max speed) and per-particle position and velocity. Build it twice:
+naive (every particle carries its own copies) and flyweight
+(<code>ParticleType</code> frozen and cached via <code>lru_cache</code>, with
+<code>__slots__</code> on the particle). Measure both with
+<code>tracemalloc</code> and report the ratio. Then write the test that
+enforces the law: mutating a shared type must raise.</p><details><summary>Hint</summary><p>Measure with <code>tracemalloc.start()</code>, build the list,
+<code>tracemalloc.get_traced_memory()</code>. The law test is three lines:
+<code>with pytest.raises(dataclasses.FrozenInstanceError):
+ptype.max_speed = 99</code>. Expect roughly a 3&ndash;5&times; drop, more
+with <code>__slots__</code>.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="bridge.html"><span class="dir">&larr; previous</span>Bridge</a><a rel="next" href="mediator.html" style="text-align:right"><span class="dir">next &rarr;</span>Mediator</a></div>
+</main>
+<script src="app.js"></script>
+
+</body>
+</html>

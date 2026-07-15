@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interpreter &middot; GoF Field Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body style="--cat: var(--behavioral)">
+<nav class="topnav">
+  <div class="crumb"><a href="index.html">GoF field guide</a> &middot; Behavioral &middot; <b>Interpreter</b></div>
+  <div class="pn"><a rel="prev" href="visitor.html">&larr; Visitor</a></div>
+</nav>
+<main>
+<header class="card">
+  <span class="kicker">Pattern 23 / 23 &middot; Behavioral</span>
+  <h1>Interpreter</h1>
+  <div class="glyph"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.2 15 6.2 12 9.2 9 6.2z"/><path d="M10.8 8.6 6.8 13.6M13.2 8.6 17.2 13.6"/><rect x="4" y="14" width="5.2" height="5.2" rx="1"/><rect x="14.8" y="14" width="5.2" height="5.2" rx="1"/></svg></div>
+  <p class="intent">Represent a small language's grammar as a class tree, and evaluate sentences by walking it — powerful, and the pattern to reach for last.</p>
+</header>
+<h2>The problem</h2>
+<p>Ops wants to configure alert rules without a deploy:
+<code>"cpu &gt; 90 and disk &gt; 80"</code>, editable in a settings screen.
+Hardcoding rules as Python functions means a release per tweak; and no,
+<code>eval()</code> on operator-entered strings is not on the table &mdash;
+that's remote code execution with extra steps.</p><h2>The pattern</h2>
+<p>Give each grammar element a class with an <code>interpret(context)</code>
+method: terminals (variables, numbers) evaluate themselves; composites
+(comparisons, <code>and</code>/<code>or</code>) evaluate their children and
+combine. A rule becomes a tree; evaluation is a walk:</p><pre><code>from typing import Protocol
+
+class Expr(Protocol):
+    def interpret(self, ctx: dict) -&gt; object: ...
+
+class Num:
+    def __init__(self, value: float):
+        self.value = value
+    def interpret(self, ctx: dict) -&gt; float:
+        return self.value
+
+class Var:
+    def __init__(self, name: str):
+        self.name = name
+    def interpret(self, ctx: dict) -&gt; float:
+        return ctx[self.name]
+
+class Gt:
+    def __init__(self, left: Expr, right: Expr):
+        self.left, self.right = left, right
+    def interpret(self, ctx: dict) -&gt; bool:
+        return self.left.interpret(ctx) &gt; self.right.interpret(ctx)
+
+class And:
+    def __init__(self, left: Expr, right: Expr):
+        self.left, self.right = left, right
+    def interpret(self, ctx: dict) -&gt; bool:
+        return self.left.interpret(ctx) and self.right.interpret(ctx)
+
+# &quot;cpu &gt; 90 and disk &gt; 80&quot;, as a tree:
+rule = And(Gt(Var(&quot;cpu&quot;), Num(90)), Gt(Var(&quot;disk&quot;), Num(80)))
+
+rule.interpret({&quot;cpu&quot;: 95, &quot;disk&quot;: 85})   # True
+rule.interpret({&quot;cpu&quot;: 95, &quot;disk&quot;: 40})   # False</code></pre>
+<p>Notice the pattern is only the <em>evaluation</em> half &mdash; something
+still has to turn the string into the tree. For a grammar this small, a
+tokenizer plus a short recursive-descent parser (one function per precedence
+level) is a well-trodden afternoon; that's the exercise below.</p><h2>The senior warning</h2>
+<p>This is the pattern I've most often <em>removed</em> from codebases. A
+custom language starts as three classes and becomes parentheses, operator
+precedence, string escaping, error messages with line numbers, a debugger
+request&hellip; You are signing up to maintain a language runtime. The
+checklist before building one: can the rules live in data
+(thresholds in a table)? Is there an existing mini-language
+(<code>jmespath</code>, SQL, <code>re</code>, JSON Logic) that fits? Is
+<code>ast.literal_eval</code> (safe literals only) enough? Only when the
+domain genuinely needs its own notation &mdash; and users will write enough
+of it to repay a parser &mdash; does Interpreter earn its keep. Then it's
+lovely.</p><div class="box"><span class="label">In the wild</span>
+<p><code>re</code> is an interpreter for the regex language you feed it
+(compiled patterns are the tree). SQL engines, spreadsheet formulas, Jinja
+templates, <code>str.format</code>'s mini-language, and Python's own
+<code>ast</code> module &mdash; your code is a tree being walked by an
+interpreter right now.</p></div><div class="box"><span class="label">When not to use it</span>
+<p>Almost always, at first. Prefer configuration-as-data, an embedded
+existing language, or plain Python callables in a registry. Never
+<code>eval()</code>/<code>exec()</code> untrusted input &mdash; not even
+&ldquo;sanitized&rdquo;. And if the grammar starts growing operators monthly,
+graduate to a parser library (Lark, pyparsing) before the hand-rolled parser
+becomes the bug farm.</p></div><div class="box exercise"><span class="label">Exercise 23</span>
+<p>Extend the tree with <code>Or</code> and <code>Not</code>, then write the
+missing half: <code>parse(tokens)</code> for pre-tokenized rules like
+<code>["cpu", "&gt;", "90", "and", "not", "disk", "&gt;", "80"]</code>.
+Use recursive descent with precedence <code>or</code> &lt; <code>and</code>
+&lt; <code>not</code> &lt; comparison. Evaluate three rules against a list of
+server dicts and return the servers that alert. Bonus: a helpful
+<code>ParseError</code> naming the unexpected token &mdash; error quality is
+where hand-rolled parsers go to die.</p><details><summary>Hint</summary><p>One function per level: <code>parse_or</code> calls
+<code>parse_and</code> and loops on <code>"or"</code>; <code>parse_and</code>
+calls <code>parse_not</code>; <code>parse_not</code> consumes an optional
+<code>"not"</code> then calls <code>parse_cmp</code>. Keep a position index
+in a small <code>Parser</code> class &mdash; threading it through bare
+functions is the fiddly part the class removes.</p></details></div>
+<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<div class="footnav"><a rel="prev" href="visitor.html"><span class="dir">&larr; previous</span>Visitor</a><span></span></div>
+</main>
+<script src="app.js"></script>
+
+</body>
+</html>
