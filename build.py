@@ -153,7 +153,7 @@ def render_page(slug, i):
   <p class="intent">{p["intent"]}</p>
 </header>
 {"".join(body)}
-<p class="review">Done with the exercise? Bring your solution back to Claude for a code review, or ask for a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
+<p class="review">Done with the exercise? Take your solution to any AI assistant for a code review, or reach out to <a href="mailto:alipira1992@gmail.com">Ali Pira</a> for feedback or a deeper dive on anything here. Tip: use &larr; and &rarr; keys to move between lessons.</p>
 <div class="footnav">{prev_a or "<span></span>"}{next_a or "<span></span>"}</div>
 </main>
 <script src="app.js"></script>
@@ -207,7 +207,7 @@ def render_index():
   each taught the way a senior architect would: the problem first, then the classic
   solution, then the Pythonic shortcut, real-world sightings, and the cases where
   the honest answer is &ldquo;don&rsquo;t&rdquo;. Every lesson ends with an exercise.
-  Work offline, then bring your solutions back to Claude for review.</p>
+  Work offline, then take your solutions to any AI assistant &mdash; or to <a href="mailto:alipira1992@gmail.com">Ali Pira</a> &mdash; for review.</p>
   <p class="legend">
     <span><span class="dot" style="background: var(--creational)"></span>Creational</span>
     <span><span class="dot" style="background: var(--structural)"></span>Structural</span>
